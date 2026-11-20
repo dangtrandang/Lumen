@@ -72,8 +72,16 @@ thread_local! {
     static PENDING_MOVE: std::cell::Cell<Option<(usize, RECT)>> = const { std::cell::Cell::new(None) };
     static IN_WM_MOVING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static SELECTED_GROUP: RefCell<std::collections::HashSet<usize>> = RefCell::new(std::collections::HashSet::new());
+    static CLUSTER_DRAG: RefCell<Option<ClusterDrag>> = const { RefCell::new(None) };
     static IN_GROUP_MOVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static MARQUEE_OVERLAY: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+struct ClusterDrag {
+    start_x: i32,
+    start_y: i32,
+    box_rect: [i32; 4],
+    origins: Vec<(HWND, i32, i32)>,
 }
 
 pub fn set_marquee_overlay(hwnd: HWND) {
@@ -86,12 +94,145 @@ pub fn is_widget_selected(hwnd: HWND) -> bool {
 
 pub fn clear_widget_selection() {
     SELECTED_GROUP.with(|g| g.borrow_mut().clear());
+    CLUSTER_DRAG.with(|d| *d.borrow_mut() = None);
     let mhwnd = MARQUEE_OVERLAY.with(|m| m.get() as HWND);
     if !mhwnd.is_null() {
         unsafe {
+            let ex = GetWindowLongPtrW(mhwnd, GWL_EXSTYLE);
+            SetWindowLongPtrW(mhwnd, GWL_EXSTYLE, ex | (WS_EX_TRANSPARENT as isize));
             ShowWindow(mhwnd, SW_HIDE);
         }
     }
+}
+
+pub unsafe fn begin_cluster_drag(pt: POINT) -> bool {
+    let ids: Vec<usize> = SELECTED_GROUP.with(|g| g.borrow().iter().copied().collect());
+    if ids.is_empty() {
+        return false;
+    }
+    let Some(bounds) = selected_widgets_bounds() else {
+        return false;
+    };
+    let mut origins = Vec::with_capacity(ids.len());
+    for id in &ids {
+        let hwnd = *id as HWND;
+        if IsWindow(hwnd) != 0 && IsWindowVisible(hwnd) != 0 {
+            let mut wr: RECT = zeroed();
+            GetWindowRect(hwnd, &mut wr);
+            origins.push((hwnd, wr.left, wr.top));
+        }
+    }
+    if origins.is_empty() {
+        return false;
+    }
+    MANAGER.with(|m| {
+        if let Ok(mut x) = m.try_borrow_mut() {
+            if let Some(s) = x.as_mut() {
+                for &(hwnd, _, _) in &origins {
+                    if let Some(p) = s.members.get_mut(&(hwnd as usize)) {
+                        p.moving = true;
+                        p.snap_drag = None;
+                    }
+                }
+                s.changed();
+            }
+        }
+    });
+    CLUSTER_DRAG.with(|d| {
+        *d.borrow_mut() = Some(ClusterDrag {
+            start_x: pt.x,
+            start_y: pt.y,
+            box_rect: [bounds[0] - 6, bounds[1] - 6, bounds[2] + 6, bounds[3] + 6],
+            origins,
+        });
+    });
+    true
+}
+
+pub unsafe fn update_cluster_drag(pt: POINT) -> bool {
+    let snap = CLUSTER_DRAG.with(|d| {
+        let b = d.borrow();
+        let cd = b.as_ref()?;
+        Some((
+            pt.x - cd.start_x,
+            pt.y - cd.start_y,
+            cd.box_rect,
+            cd.origins.clone(),
+        ))
+    });
+    let Some((dx, dy, box_rect, origins)) = snap else {
+        return false;
+    };
+    IN_GROUP_MOVE.with(|f| f.set(true));
+    for (hwnd, ox, oy) in &origins {
+        if IsWindow(*hwnd) != 0 {
+            SetWindowPos(
+                *hwnd,
+                null_mut(),
+                ox + dx,
+                oy + dy,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+    let mhwnd = MARQUEE_OVERLAY.with(|m| m.get() as HWND);
+    if !mhwnd.is_null() {
+        SetWindowPos(
+            mhwnd,
+            HWND_TOPMOST,
+            box_rect[0] + dx,
+            box_rect[1] + dy,
+            box_rect[2] - box_rect[0],
+            box_rect[3] - box_rect[1],
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+    }
+    MANAGER.with(|m| {
+        if let Ok(mut x) = m.try_borrow_mut() {
+            if let Some(s) = x.as_mut() {
+                for (hwnd, _, _) in &origins {
+                    s.update(*hwnd, None);
+                }
+                s.changed();
+            }
+        }
+    });
+    IN_GROUP_MOVE.with(|f| f.set(false));
+    refresh();
+    true
+}
+
+pub unsafe fn end_cluster_drag() {
+    let origins = CLUSTER_DRAG.with(|d| d.borrow_mut().take().map(|c| c.origins));
+    let Some(origins) = origins else {
+        return;
+    };
+    IN_GROUP_MOVE.with(|f| f.set(true));
+    MANAGER.with(|m| {
+        if let Ok(mut x) = m.try_borrow_mut() {
+            if let Some(s) = x.as_mut() {
+                for (hwnd, _, _) in &origins {
+                    if let Some(p) = s.members.get_mut(&(*hwnd as usize)) {
+                        p.moving = false;
+                        p.snap_drag = None;
+                    }
+                    s.materials.remove(&(*hwnd as usize));
+                    s.update(*hwnd, None);
+                }
+                s.changed();
+            }
+        }
+    });
+    for (hwnd, _, _) in &origins {
+        if IsWindow(*hwnd) != 0 {
+            SendMessageW(*hwnd, WM_EXITSIZEMOVE, 0, 0);
+        }
+    }
+    sync_marquee_to_selection();
+    IN_GROUP_MOVE.with(|f| f.set(false));
+    refresh();
 }
 
 pub unsafe fn select_widgets_in_rect(rect: [i32; 4]) -> usize {
@@ -151,6 +292,8 @@ pub unsafe fn sync_marquee_to_selection() {
         return;
     }
     if let Some([l, t, r, b]) = selected_widgets_bounds() {
+        let ex = GetWindowLongPtrW(mhwnd, GWL_EXSTYLE);
+        SetWindowLongPtrW(mhwnd, GWL_EXSTYLE, ex & !(WS_EX_TRANSPARENT as isize));
         SetWindowPos(
             mhwnd,
             HWND_TOPMOST,
@@ -158,9 +301,11 @@ pub unsafe fn sync_marquee_to_selection() {
             t - 6,
             (r - l) + 12,
             (b - t) + 12,
-            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED,
         );
     } else {
+        let ex = GetWindowLongPtrW(mhwnd, GWL_EXSTYLE);
+        SetWindowLongPtrW(mhwnd, GWL_EXSTYLE, ex | (WS_EX_TRANSPARENT as isize));
         ShowWindow(mhwnd, SW_HIDE);
     }
 }

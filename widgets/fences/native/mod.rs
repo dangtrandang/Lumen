@@ -358,7 +358,7 @@ unsafe fn create_marquee_overlay() -> HWND {
     let wc = WNDCLASSW {
         lpfnWndProc: Some(marquee_proc),
         hInstance: instance,
-        hCursor: LoadCursorW(null_mut(), IDC_ARROW),
+        hCursor: LoadCursorW(null_mut(), IDC_SIZEALL),
         hbrBackground: CreateSolidBrush(0x00ff8c4f),
         lpszClassName: class.as_ptr(),
         ..zeroed()
@@ -379,13 +379,45 @@ unsafe fn create_marquee_overlay() -> HWND {
         null(),
     );
     if !hwnd.is_null() {
-        SetLayeredWindowAttributes(hwnd, 0, 95, LWA_ALPHA);
+        SetLayeredWindowAttributes(hwnd, 0, 85, LWA_ALPHA);
     }
     hwnd
 }
 
 unsafe extern "system" fn marquee_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
-    DefWindowProcW(hwnd, msg, wp, lp)
+    match msg {
+        WM_SETCURSOR => {
+            SetCursor(LoadCursorW(null_mut(), IDC_SIZEALL));
+            1
+        }
+        WM_MOUSEACTIVATE => MA_NOACTIVATE as isize,
+        WM_LBUTTONDOWN => {
+            let mut pt: POINT = zeroed();
+            GetCursorPos(&mut pt);
+            if crate::fusion::begin_cluster_drag(pt) {
+                SetCapture(hwnd);
+            }
+            0
+        }
+        WM_MOUSEMOVE => {
+            let mut pt: POINT = zeroed();
+            GetCursorPos(&mut pt);
+            crate::fusion::update_cluster_drag(pt);
+            0
+        }
+        WM_LBUTTONUP | WM_CAPTURECHANGED | WM_CANCELMODE => {
+            if msg == WM_LBUTTONUP {
+                ReleaseCapture();
+            }
+            crate::fusion::end_cluster_drag();
+            0
+        }
+        WM_RBUTTONDOWN => {
+            crate::fusion::clear_widget_selection();
+            0
+        }
+        _ => DefWindowProcW(hwnd, msg, wp, lp),
+    }
 }
 
 unsafe fn register_class() -> Result<(), String> {
@@ -1179,7 +1211,8 @@ unsafe fn handle_raw_mouse(lparam: LPARAM, shared: &Rc<RefCell<SharedState>>) {
             } else {
                 null_mut()
             };
-            let clicked_selected = (!target.is_null() && crate::fusion::is_widget_selected(target))
+            let clicked_selected = (target == mhwnd && !mhwnd.is_null())
+                || (!target.is_null() && crate::fusion::is_widget_selected(target))
                 || (!root.is_null() && crate::fusion::is_widget_selected(root));
             if !clicked_selected {
                 clear_group = true;
@@ -1216,6 +1249,10 @@ unsafe fn handle_raw_mouse(lparam: LPARAM, shared: &Rc<RefCell<SharedState>>) {
 
     if let Some([ml, mt, mr, mb]) = drag_box {
         if !mhwnd.is_null() {
+            let ex = GetWindowLongPtrW(mhwnd, GWL_EXSTYLE);
+            if ex & (WS_EX_TRANSPARENT as isize) == 0 {
+                SetWindowLongPtrW(mhwnd, GWL_EXSTYLE, ex | (WS_EX_TRANSPARENT as isize));
+            }
             SetWindowPos(
                 mhwnd,
                 HWND_TOPMOST,
@@ -1635,13 +1672,18 @@ mod tests {
             assert!(crate::fusion::is_widget_selected(w2));
             assert!(!crate::fusion::is_widget_selected(w3));
 
-            // Drag w1 by (+50, +30) -> w2 must move by (+50, +30) automatically!
-            SetWindowPos(w1, null_mut(), 150, 130, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            // Drag the selected cluster via begin_cluster_drag / update_cluster_drag / end_cluster_drag
+            assert!(crate::fusion::begin_cluster_drag(POINT { x: 150, y: 150 }));
+            assert!(crate::fusion::update_cluster_drag(POINT { x: 200, y: 180 }));
+            crate::fusion::end_cluster_drag();
 
+            let mut r1: RECT = zeroed();
             let mut r2: RECT = zeroed();
             let mut r3: RECT = zeroed();
+            GetWindowRect(w1, &mut r1);
             GetWindowRect(w2, &mut r2);
             GetWindowRect(w3, &mut r3);
+            assert_eq!([r1.left, r1.top], [150, 130], "w1 must move by (+50, +30)");
             assert_eq!([r2.left, r2.top], [280, 130], "w2 must move with w1 as a single block");
             assert_eq!([r3.left, r3.top], [900, 700], "unselected w3 must remain untouched");
 
