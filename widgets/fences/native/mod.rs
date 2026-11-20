@@ -184,7 +184,6 @@ struct FenceWindow {
     selected: HashSet<usize>,
     marquee: Option<[f32; 4]>,
     group_selected: bool,
-    group_drag: Vec<(Rc<RefCell<FenceWindow>>, i32, i32)>,
     scroll_y: f32,
     alpha_tween: Tween,
     started: Instant,
@@ -248,7 +247,9 @@ impl Host {
         let marquee_hwnd = if smoke {
             null_mut()
         } else {
-            create_marquee_overlay()
+            let mh = create_marquee_overlay();
+            crate::fusion::set_marquee_overlay(mh);
+            mh
         };
         let shared = Rc::new(RefCell::new(SharedState {
             root: root.into(),
@@ -437,7 +438,6 @@ unsafe fn create_fence_window(
         selected: HashSet::new(),
         marquee: None,
         group_selected: false,
-        group_drag: Vec::new(),
         scroll_y: 0.0,
         alpha_tween: Tween::fixed(initial_alpha),
         started: Instant::now(),
@@ -741,7 +741,7 @@ impl FenceWindow {
         {
             let c = Canvas::new(frame.dc, dpi);
             c.round([0.0, 0.0, w, h], RADIUS, 0x0b0f1c, 150, false, false);
-            if self.group_selected {
+            if self.group_selected || crate::fusion::is_widget_selected(self.hwnd) {
                 c.round([1.0, 1.0, w - 1.0, h - 1.0], RADIUS, 0x7c9cff, 235, true, false);
                 c.round([2.0, 2.0, w - 2.0, h - 2.0], RADIUS, 0x7c9cff, 160, true, false);
             } else {
@@ -1173,6 +1173,17 @@ unsafe fn handle_raw_mouse(lparam: LPARAM, shared: &Rc<RefCell<SharedState>>) {
                 sh.last_desk_click_pt = [pt.x, pt.y];
             }
         } else {
+            let target = WindowFromPoint(pt);
+            let root = if !target.is_null() {
+                GetAncestor(target, GA_ROOT)
+            } else {
+                null_mut()
+            };
+            let clicked_selected = (!target.is_null() && crate::fusion::is_widget_selected(target))
+                || (!root.is_null() && crate::fusion::is_widget_selected(root));
+            if !clicked_selected {
+                clear_group = true;
+            }
             let mut sh = shared.borrow_mut();
             sh.last_desk_click_ms = None;
             sh.desk_drag_start = None;
@@ -1192,6 +1203,7 @@ unsafe fn handle_raw_mouse(lparam: LPARAM, shared: &Rc<RefCell<SharedState>>) {
     }
 
     if clear_group {
+        crate::fusion::clear_widget_selection();
         let wins = shared.borrow().windows.clone();
         for w in wins {
             let mut b = w.borrow_mut();
@@ -1214,15 +1226,14 @@ unsafe fn handle_raw_mouse(lparam: LPARAM, shared: &Rc<RefCell<SharedState>>) {
                 SWP_NOACTIVATE | SWP_SHOWWINDOW,
             );
         }
+        crate::fusion::select_widgets_in_rect([ml, mt, mr, mb]);
         let wins = shared.borrow().windows.clone();
         for w in wins {
             let mut b = w.borrow_mut();
             if !b.visible {
                 continue;
             }
-            let mut wr: RECT = zeroed();
-            GetWindowRect(b.hwnd, &mut wr);
-            let hit = rect_intersects([wr.left, wr.top, wr.right, wr.bottom], [ml, mt, mr, mb]);
+            let hit = crate::fusion::is_widget_selected(b.hwnd);
             if b.group_selected != hit {
                 b.group_selected = hit;
                 b.paint();
@@ -1230,8 +1241,8 @@ unsafe fn handle_raw_mouse(lparam: LPARAM, shared: &Rc<RefCell<SharedState>>) {
         }
     }
 
-    if end_drag && !mhwnd.is_null() {
-        ShowWindow(mhwnd, SW_HIDE);
+    if end_drag {
+        crate::fusion::sync_marquee_to_selection();
     }
 
     if toggle_hide {
@@ -1316,14 +1327,6 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 let dpi = (GetDpiForWindow(hwnd).max(96) as f32) / 96.0;
                 if let Some(sh) = &mut b.shadow {
                     sh.sync(hwnd, dpi, 255);
-                }
-                for (ow, ox, oy) in &b.group_drag {
-                    let mut ob = ow.borrow_mut();
-                    let ohwnd = ob.hwnd;
-                    SetWindowPos(ohwnd, null_mut(), ox + dx, oy + dy, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-                    if let Some(sh) = &mut ob.shadow {
-                        sh.sync(ohwnd, dpi, 255);
-                    }
                 }
                 return 0;
             }
@@ -1443,25 +1446,12 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 return 0;
             }
             let hit = b.hit_item(lx, ly);
-            if ly < HEADER_H || b.group_selected {
+            if ly < HEADER_H || b.group_selected || crate::fusion::is_widget_selected(hwnd) {
                 let mut pt: POINT = zeroed();
                 let mut wr: RECT = zeroed();
                 GetCursorPos(&mut pt);
                 GetWindowRect(hwnd, &mut wr);
                 b.dragging = Some([pt.x, pt.y, wr.left, wr.top]);
-                b.group_drag.clear();
-                if b.group_selected {
-                    let wins = b.shared.borrow().windows.clone();
-                    for ow in wins {
-                        let ob = ow.borrow();
-                        if ob.hwnd != hwnd && ob.group_selected && ob.visible {
-                            let mut owr: RECT = zeroed();
-                            GetWindowRect(ob.hwnd, &mut owr);
-                            drop(ob);
-                            b.group_drag.push((ow, owr.left, owr.top));
-                        }
-                    }
-                }
                 SetCapture(hwnd);
                 return 0;
             }
@@ -1481,7 +1471,6 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             let was_drag = b.dragging.take().is_some();
             let was_resize = b.resizing.take().is_some();
             let was_marquee = b.marquee.take().is_some();
-            let gdrag = std::mem::take(&mut b.group_drag);
             if was_drag || was_resize || was_marquee {
                 ReleaseCapture();
                 if was_drag || was_resize {
@@ -1498,17 +1487,18 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                         }
                     });
                     b.background_key.clear();
-                    for (ow, _, _) in gdrag {
-                        let mut ob = ow.borrow_mut();
-                        let mut owr: RECT = zeroed();
-                        GetWindowRect(ob.hwnd, &mut owr);
-                        ob.update_spec(|s| s.position = [owr.left, owr.top]);
-                        ob.background_key.clear();
-                        ob.paint();
-                    }
                 }
                 b.paint();
             }
+            0
+        }
+        WM_EXITSIZEMOVE => {
+            let mut b = win.borrow_mut();
+            let mut wr: RECT = zeroed();
+            GetWindowRect(hwnd, &mut wr);
+            b.update_spec(|s| s.position = [wr.left, wr.top]);
+            b.background_key.clear();
+            b.paint();
             0
         }
         WM_LBUTTONDBLCLK => {
@@ -1609,5 +1599,56 @@ mod tests {
             .map(|(_, r)| [r[0] + dx, r[1] + dy])
             .collect();
         assert_eq!(moved, vec![[140, 660], [496, 660], [852, 660]]);
+    }
+
+    #[test]
+    fn test_fusion_multi_widget_block_move() {
+        let _lock = crate::native_ui_test_lock();
+        unsafe {
+            crate::fusion::init(Rc::new(RefCell::new(Glass::new(0.0, 1.0))));
+            let make = |x: i32, y: i32| {
+                let h = CreateWindowExW(
+                    WS_EX_TOOLWINDOW,
+                    wide("STATIC").as_ptr(),
+                    wide("Lumen block test").as_ptr(),
+                    WS_POPUP,
+                    x,
+                    y,
+                    120,
+                    100,
+                    null_mut(),
+                    null_mut(),
+                    null_mut(),
+                    null(),
+                );
+                ShowWindow(h, SW_SHOWNOACTIVATE);
+                crate::fusion::register_widget(h);
+                h
+            };
+            let w1 = make(100, 100);
+            let w2 = make(230, 100);
+            let w3 = make(900, 700);
+
+            let count = crate::fusion::select_widgets_in_rect([80, 80, 400, 250]);
+            assert_eq!(count, 2, "must select w1 and w2 inside marquee");
+            assert!(crate::fusion::is_widget_selected(w1));
+            assert!(crate::fusion::is_widget_selected(w2));
+            assert!(!crate::fusion::is_widget_selected(w3));
+
+            // Drag w1 by (+50, +30) -> w2 must move by (+50, +30) automatically!
+            SetWindowPos(w1, null_mut(), 150, 130, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+
+            let mut r2: RECT = zeroed();
+            let mut r3: RECT = zeroed();
+            GetWindowRect(w2, &mut r2);
+            GetWindowRect(w3, &mut r3);
+            assert_eq!([r2.left, r2.top], [280, 130], "w2 must move with w1 as a single block");
+            assert_eq!([r3.left, r3.top], [900, 700], "unselected w3 must remain untouched");
+
+            crate::fusion::clear_widget_selection();
+            for h in [w1, w2, w3] {
+                DestroyWindow(h);
+            }
+        }
     }
 }

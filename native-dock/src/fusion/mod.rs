@@ -71,6 +71,98 @@ thread_local! {
     static MANAGER: RefCell<Option<Manager>> = const { RefCell::new(None) };
     static PENDING_MOVE: std::cell::Cell<Option<(usize, RECT)>> = const { std::cell::Cell::new(None) };
     static IN_WM_MOVING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static SELECTED_GROUP: RefCell<std::collections::HashSet<usize>> = RefCell::new(std::collections::HashSet::new());
+    static IN_GROUP_MOVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static MARQUEE_OVERLAY: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+pub fn set_marquee_overlay(hwnd: HWND) {
+    MARQUEE_OVERLAY.with(|m| m.set(hwnd as usize));
+}
+
+pub fn is_widget_selected(hwnd: HWND) -> bool {
+    SELECTED_GROUP.with(|g| g.borrow().contains(&(hwnd as usize)))
+}
+
+pub fn clear_widget_selection() {
+    SELECTED_GROUP.with(|g| g.borrow_mut().clear());
+    let mhwnd = MARQUEE_OVERLAY.with(|m| m.get() as HWND);
+    if !mhwnd.is_null() {
+        unsafe {
+            ShowWindow(mhwnd, SW_HIDE);
+        }
+    }
+}
+
+pub unsafe fn select_widgets_in_rect(rect: [i32; 4]) -> usize {
+    let mut selected = std::collections::HashSet::new();
+    MANAGER.with(|m| {
+        if let Ok(x) = m.try_borrow() {
+            if let Some(s) = x.as_ref() {
+                for (&id, member) in &s.members {
+                    let hwnd = id as HWND;
+                    if !member.visible || IsWindowVisible(hwnd) == 0 {
+                        continue;
+                    }
+                    let mut wr: RECT = zeroed();
+                    GetWindowRect(hwnd, &mut wr);
+                    if wr.right >= rect[0] && wr.left <= rect[2] && wr.bottom >= rect[1] && wr.top <= rect[3] {
+                        selected.insert(id);
+                    }
+                }
+            }
+        }
+    });
+    let count = selected.len();
+    SELECTED_GROUP.with(|g| *g.borrow_mut() = selected);
+    count
+}
+
+pub unsafe fn selected_widgets_bounds() -> Option<[i32; 4]> {
+    let ids: Vec<usize> = SELECTED_GROUP.with(|g| g.borrow().iter().copied().collect());
+    if ids.is_empty() {
+        return None;
+    }
+    let mut l = i32::MAX;
+    let mut t = i32::MAX;
+    let mut r = i32::MIN;
+    let mut b = i32::MIN;
+    let mut any = false;
+    for id in ids {
+        let hwnd = id as HWND;
+        if IsWindow(hwnd) == 0 || IsWindowVisible(hwnd) == 0 {
+            continue;
+        }
+        let mut wr: RECT = zeroed();
+        if GetWindowRect(hwnd, &mut wr) != 0 && wr.right > wr.left && wr.bottom > wr.top {
+            l = l.min(wr.left);
+            t = t.min(wr.top);
+            r = r.max(wr.right);
+            b = b.max(wr.bottom);
+            any = true;
+        }
+    }
+    any.then_some([l, t, r, b])
+}
+
+pub unsafe fn sync_marquee_to_selection() {
+    let mhwnd = MARQUEE_OVERLAY.with(|m| m.get() as HWND);
+    if mhwnd.is_null() {
+        return;
+    }
+    if let Some([l, t, r, b]) = selected_widgets_bounds() {
+        SetWindowPos(
+            mhwnd,
+            HWND_TOPMOST,
+            l - 6,
+            t - 6,
+            (r - l) + 12,
+            (b - t) + 12,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+    } else {
+        ShowWindow(mhwnd, SW_HIDE);
+    }
 }
 
 pub fn in_wm_moving() -> bool {
@@ -291,6 +383,7 @@ pub unsafe fn register_widget(hwnd: HWND) {
             wide("LumenSourceWidgetPackage").as_ptr(),
             1usize as HANDLE,
         );
+        prepare(hwnd, 24.0);
     }
 }
 unsafe fn read_member(hwnd: HWND, radius: f32) -> Member {
@@ -1171,7 +1264,11 @@ unsafe extern "system" fn widget_proc(
                                             ],
                                             ..p.pane
                                         };
-                                        let d = snap_move(&candidate, &s.panes());
+                                        let mut panes = s.panes();
+                                        if is_widget_selected(hwnd) {
+                                            panes.retain(|pn| !is_widget_selected(pn.id as HWND));
+                                        }
+                                        let d = snap_move(&candidate, &panes);
                                         pos.x += d[0].round() as i32;
                                         pos.y += d[1].round() as i32;
                                     }
@@ -1190,7 +1287,10 @@ unsafe extern "system" fn widget_proc(
                         if !s.enabled {
                             return;
                         }
-                        let panes = s.panes();
+                        let mut panes = s.panes();
+                        if is_widget_selected(hwnd) {
+                            panes.retain(|pn| !is_widget_selected(pn.id as HWND));
+                        }
                         if let Some(p) = s.members.get_mut(&(hwnd as usize)) {
                             let mut cursor: POINT = zeroed();
                             GetCursorPos(&mut cursor);
@@ -1278,6 +1378,15 @@ unsafe extern "system" fn widget_proc(
         }
         _ => {}
     }
+    let old_window = if msg == WM_WINDOWPOSCHANGED && !IN_GROUP_MOVE.with(|f| f.get()) && is_widget_selected(hwnd) {
+        MANAGER.with(|m| {
+            m.try_borrow()
+                .ok()
+                .and_then(|s| s.as_ref()?.members.get(&(hwnd as usize)).map(|p| p.window))
+        })
+    } else {
+        None
+    };
     let result = DefSubclassProc(hwnd, msg, wp, lp);
     if matches!(msg, WM_WINDOWPOSCHANGED | WM_SHOWWINDOW | WM_DPICHANGED) {
         MANAGER.with(|m| {
@@ -1292,6 +1401,64 @@ unsafe extern "system" fn widget_proc(
                 }
             }
         });
+        if let Some(old_w) = old_window {
+            let mut nr: RECT = zeroed();
+            GetWindowRect(hwnd, &mut nr);
+            let old_width = old_w[2] - old_w[0];
+            let old_height = old_w[3] - old_w[1];
+            if (nr.right - nr.left) == old_width && (nr.bottom - nr.top) == old_height {
+                let dx = nr.left - old_w[0];
+                let dy = nr.top - old_w[1];
+                if dx != 0 || dy != 0 {
+                    let peers: Vec<usize> = SELECTED_GROUP.with(|g| {
+                        g.borrow()
+                            .iter()
+                            .copied()
+                            .filter(|&id| id != hwnd as usize)
+                            .collect()
+                    });
+                    if !peers.is_empty() {
+                        IN_GROUP_MOVE.with(|f| f.set(true));
+                        for peer_id in peers {
+                            let peer_hwnd = peer_id as HWND;
+                            if IsWindow(peer_hwnd) != 0 {
+                                let mut pr: RECT = zeroed();
+                                GetWindowRect(peer_hwnd, &mut pr);
+                                SetWindowPos(
+                                    peer_hwnd,
+                                    null_mut(),
+                                    pr.left + dx,
+                                    pr.top + dy,
+                                    0,
+                                    0,
+                                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                                );
+                            }
+                        }
+                        sync_marquee_to_selection();
+                        IN_GROUP_MOVE.with(|f| f.set(false));
+                    }
+                }
+            }
+        }
+    }
+    if matches!(msg, WM_EXITSIZEMOVE | WM_LBUTTONUP) && is_widget_selected(hwnd) && !IN_GROUP_MOVE.with(|f| f.get()) {
+        let peers: Vec<usize> = SELECTED_GROUP.with(|g| {
+            g.borrow()
+                .iter()
+                .copied()
+                .filter(|&id| id != hwnd as usize)
+                .collect()
+        });
+        IN_GROUP_MOVE.with(|f| f.set(true));
+        for peer_id in peers {
+            let peer_hwnd = peer_id as HWND;
+            if IsWindow(peer_hwnd) != 0 {
+                SendMessageW(peer_hwnd, WM_EXITSIZEMOVE, 0, 0);
+            }
+        }
+        sync_marquee_to_selection();
+        IN_GROUP_MOVE.with(|f| f.set(false));
     }
     result
 }
