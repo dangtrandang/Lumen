@@ -73,12 +73,180 @@ const CMD_FILTER_ALL: usize = 1030;
 const CMD_FILTER_FOLDERS: usize = 1031;
 const CMD_FILTER_FILES: usize = 1032;
 const CMD_FOLDERS_FIRST: usize = 1033;
+const CMD_SORT_MANUAL: usize = 1034;
+
+const CMD_TEXT_11: usize = 1040;
+const CMD_TEXT_13: usize = 1041;
+const CMD_TEXT_15: usize = 1042;
+const CMD_TEXT_17: usize = 1043;
+
+const CMD_VIEW_GRID: usize = 1050;
+const CMD_VIEW_GALLERY: usize = 1051;
+const CMD_VIEW_COMPACT: usize = 1052;
+const CMD_TOGGLE_THUMBS: usize = 1053;
 
 fn cell_dims(spec: &FenceSpec) -> (f32, f32, f32) {
-    let icon = spec.icon_size.clamp(20, 64) as f32;
-    let cw = (icon + 46.0).max(70.0);
-    let ch = icon + 42.0;
+    let base_icon = match spec.view_mode.as_str() {
+        "gallery" => spec.icon_size.max(72),
+        "compact" => spec.icon_size.min(24),
+        _ => spec.icon_size,
+    };
+    let icon = base_icon.clamp(20, 96) as f32;
+    let text_extra = (spec.text_size.clamp(10, 20) - 13).max(0) as f32 * 2.5;
+    let (cw, ch) = match spec.view_mode.as_str() {
+        "gallery" => (
+            (icon + 28.0 + text_extra).max(96.0),
+            icon + 34.0 + text_extra,
+        ),
+        "compact" => (
+            (icon + 38.0 + text_extra).max(62.0),
+            icon + 34.0 + text_extra,
+        ),
+        _ => (
+            (icon + 46.0 + text_extra).max(70.0),
+            icon + 42.0 + text_extra,
+        ),
+    };
     (icon, cw, ch)
+}
+
+/// Magnetically snaps a dragged fence `(nx, ny, w, h)` to neighboring fences' corners/edges
+/// (aligned left/right/top/bottom, or adjacent with a 12px gap) and monitor work-area margins (16px).
+pub fn snap_fence_position(
+    nx: i32,
+    ny: i32,
+    w: i32,
+    h: i32,
+    others: &[[i32; 4]],
+    work: [i32; 4],
+) -> [i32; 2] {
+    const SNAP_DIST: i32 = 14;
+    const GAP: i32 = 12;
+    const MARGIN: i32 = 16;
+
+    let mut best_x = nx;
+    let mut best_dx = SNAP_DIST + 1;
+    let mut best_y = ny;
+    let mut best_dy = SNAP_DIST + 1;
+
+    let mut try_x = |cand: i32| {
+        let d = (nx - cand).abs();
+        if d <= SNAP_DIST && d < best_dx {
+            best_dx = d;
+            best_x = cand;
+        }
+    };
+    let mut try_y = |cand: i32| {
+        let d = (ny - cand).abs();
+        if d <= SNAP_DIST && d < best_dy {
+            best_dy = d;
+            best_y = cand;
+        }
+    };
+
+    if work[2] > work[0] && work[3] > work[1] {
+        try_x(work[0] + MARGIN);
+        try_x(work[2] - MARGIN - w);
+        try_y(work[1] + MARGIN);
+        try_y(work[3] - MARGIN - h);
+    }
+
+    for &[ol, ot, or, ob] in others {
+        // Horizontal edge & corner alignments + 12px magnetic gap
+        try_x(ol);
+        try_x(or - w);
+        try_x(or + GAP);
+        try_x(ol - GAP - w);
+        try_x(or);
+        try_x(ol - w);
+
+        // Vertical edge & corner alignments + 12px magnetic gap
+        try_y(ot);
+        try_y(ob - h);
+        try_y(ob + GAP);
+        try_y(ot - GAP - h);
+        try_y(ob);
+        try_y(ot - h);
+    }
+
+    [best_x, best_y]
+}
+
+fn is_image_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "bmp" | "ico"
+            )
+        })
+}
+
+pub fn load_image_thumbnail(path: &Path, thumb_sz: u32) -> Option<render::Image> {
+    if !is_image_file(path) {
+        return None;
+    }
+    let img = image::open(path).ok()?;
+    let scaled = img.thumbnail(thumb_sz, thumb_sz).into_rgba8();
+    let (sw, sh) = scaled.dimensions();
+    if sw == 0 || sh == 0 {
+        return None;
+    }
+    let side = thumb_sz.max(32);
+    let mut canvas = vec![0u8; (side * side * 4) as usize];
+    let ox = (side.saturating_sub(sw)) / 2;
+    let oy = (side.saturating_sub(sh)) / 2;
+    let raw = scaled.into_raw();
+    let rad = (side as f32 * 0.12).clamp(4.0, 12.0);
+
+    for y in 0..sh {
+        for x in 0..sw {
+            // Rounded corner mask on the photo rectangle
+            let fx = x as f32 + 0.5;
+            let fy = y as f32 + 0.5;
+            let fw = sw as f32;
+            let fh = sh as f32;
+            let dx = if fx < rad {
+                rad - fx
+            } else if fx > fw - rad {
+                fx - (fw - rad)
+            } else {
+                0.0
+            };
+            let dy = if fy < rad {
+                rad - fy
+            } else if fy > fh - rad {
+                fy - (fh - rad)
+            } else {
+                0.0
+            };
+            let dist = (dx * dx + dy * dy).sqrt();
+            let corner_alpha = if dist > rad + 0.5 {
+                0.0
+            } else if dist > rad - 0.5 {
+                (rad + 0.5 - dist).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            if corner_alpha <= 0.0 {
+                continue;
+            }
+            let src_i = ((y * sw + x) * 4) as usize;
+            let dst_x = (ox + x).min(side - 1);
+            let dst_y = (oy + y).min(side - 1);
+            let dst_i = ((dst_y * side + dst_x) * 4) as usize;
+            let a = ((raw[src_i + 3] as f32) * corner_alpha).round() as u32;
+            let r = ((raw[src_i] as u32 * a + 127) / 255) as u8;
+            let g = ((raw[src_i + 1] as u32 * a + 127) / 255) as u8;
+            let b = ((raw[src_i + 2] as u32 * a + 127) / 255) as u8;
+            canvas[dst_i] = r;
+            canvas[dst_i + 1] = g;
+            canvas[dst_i + 2] = b;
+            canvas[dst_i + 3] = a as u8;
+        }
+    }
+    render::Image::from_rgba(side, side, canvas)
 }
 
 pub fn rect_intersects(a: [i32; 4], b: [i32; 4]) -> bool {
@@ -142,12 +310,58 @@ pub unsafe fn draw_cleartype_text(
     DeleteObject(font as _);
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct FenceEntry {
     name: String,
     path: PathBuf,
     is_dir: bool,
     modified: SystemTime,
+}
+
+impl FenceEntry {
+    fn file_key(&self) -> String {
+        self.path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&self.name)
+            .to_lowercase()
+    }
+}
+
+fn reorder_entries_by_index(
+    entries: &mut Vec<FenceEntry>,
+    from_idx: usize,
+    to_idx: usize,
+) -> Vec<String> {
+    if from_idx < entries.len() && to_idx < entries.len() && from_idx != to_idx {
+        let item = entries.remove(from_idx);
+        entries.insert(to_idx, item);
+    }
+    entries.iter().map(|e| e.file_key()).collect()
+}
+
+pub fn move_entry_to_folder(src: &Path, dst_folder: &Path) -> Result<PathBuf, String> {
+    if !src.exists() {
+        return Err("source does not exist".into());
+    }
+    std::fs::create_dir_all(dst_folder).map_err(|e| e.to_string())?;
+    let file_name = src
+        .file_name()
+        .ok_or_else(|| "invalid source file name".to_string())?;
+    let dst = dst_folder.join(file_name);
+    if src == dst {
+        return Ok(dst);
+    }
+    std::fs::rename(src, &dst).map_err(|e| e.to_string())?;
+    Ok(dst)
+}
+
+#[derive(Clone, Copy)]
+struct ItemDrag {
+    idx: usize,
+    start_pt: [f32; 2],
+    cur_pt: [f32; 2],
+    active: bool,
 }
 
 struct SharedState {
@@ -183,6 +397,7 @@ struct FenceWindow {
     hover_roll: bool,
     selected: HashSet<usize>,
     marquee: Option<[f32; 4]>,
+    item_drag: Option<ItemDrag>,
     group_selected: bool,
     scroll_y: f32,
     alpha_tween: Tween,
@@ -469,6 +684,7 @@ unsafe fn create_fence_window(
         hover_roll: false,
         selected: HashSet::new(),
         marquee: None,
+        item_drag: None,
         group_selected: false,
         scroll_y: 0.0,
         alpha_tween: Tween::fixed(initial_alpha),
@@ -579,7 +795,20 @@ impl FenceWindow {
                 modified,
             });
         }
-        if spec.sort_by == "date" {
+        if spec.sort_by == "manual" && !spec.custom_order.is_empty() {
+            let order_map: HashMap<String, usize> = spec
+                .custom_order
+                .iter()
+                .enumerate()
+                .map(|(i, k)| (k.to_lowercase(), i))
+                .collect();
+            self.entries.sort_by(|a, b| {
+                let ia = order_map.get(&a.file_key()).copied().unwrap_or(usize::MAX);
+                let ib = order_map.get(&b.file_key()).copied().unwrap_or(usize::MAX);
+                ia.cmp(&ib)
+                    .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            });
+        } else if spec.sort_by == "date" {
             self.entries.sort_by(|a, b| {
                 let ord = a.modified.cmp(&b.modified);
                 let ord = if spec.sort_desc { ord.reverse() } else { ord };
@@ -602,9 +831,21 @@ impl FenceWindow {
     }
 
     unsafe fn icon_for(&mut self, path: &Path) -> Option<&render::Image> {
-        let key = path.to_string_lossy().into_owned();
+        let show_thumbs = self.spec().is_none_or(|s| s.show_thumbnails);
+        let key = format!(
+            "{}#thumb={}",
+            path.to_string_lossy(),
+            if show_thumbs { 1 } else { 0 }
+        );
         if !self.icons.contains_key(&key) {
-            let wpath = wide(&key);
+            if show_thumbs && is_image_file(path) {
+                if let Some(thumb) = load_image_thumbnail(path, 96) {
+                    self.icons.insert(key.clone(), thumb);
+                    return self.icons.get(&key);
+                }
+            }
+            let raw_path = path.to_string_lossy().into_owned();
+            let wpath = wide(&raw_path);
             let mut info: SHFILEINFOW = zeroed();
             let mut hicon: HICON = null_mut();
             if SHGetFileInfoW(
@@ -826,6 +1067,8 @@ impl FenceWindow {
                 }
                 let start_x = (PAD_X + ((w - PAD_X * 2.0) - cols as f32 * cell_w) * 0.5).round();
                 let entry_count = self.entries.len();
+                let tile_font_px = (spec.text_size.clamp(10, 22) as f32 * dpi).round() as i32;
+                let active_drag_idx = self.item_drag.filter(|d| d.active).map(|d| d.idx);
                 for idx in 0..entry_count {
                     let row = idx / cols;
                     let col = idx % cols;
@@ -834,7 +1077,10 @@ impl FenceWindow {
                     if y + cell_h < HEADER_H || y > h {
                         continue;
                     }
-                    if self.selected.contains(&idx) {
+                    if active_drag_idx.is_some() && self.hover_item == Some(idx) {
+                        c.round([x + 2.0, y + 2.0, x + cell_w - 2.0, y + cell_h - 2.0], 10.0, 0x4f8cff, 70, false, false);
+                        c.round([x + 2.0, y + 2.0, x + cell_w - 2.0, y + cell_h - 2.0], 10.0, 0x7c9cff, 220, true, false);
+                    } else if self.selected.contains(&idx) {
                         c.round([x + 3.0, y + 2.0, x + cell_w - 3.0, y + cell_h - 2.0], 10.0, 0x7c9cff, 65, false, false);
                     } else if self.hover_item == Some(idx) {
                         c.round([x + 3.0, y + 2.0, x + cell_w - 3.0, y + cell_h - 2.0], 10.0, 0xffffff, 35, false, false);
@@ -853,11 +1099,38 @@ impl FenceWindow {
                             ((x + cell_w - 2.0) * dpi).round() as i32,
                             ((y + cell_h - 1.0) * dpi).round() as i32,
                         ],
-                        (14.0 * dpi).round() as i32,
+                        tile_font_px,
                         400,
-                        0xffffff,
+                        if active_drag_idx == Some(idx) { 0x99aacc } else { 0xffffff },
                         DT_CENTER | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX,
                     ));
+                }
+                if let Some(idrag) = self.item_drag.filter(|d| d.active) {
+                    if idrag.idx < self.entries.len() {
+                        let gx = (idrag.cur_pt[0] - cell_w * 0.5).round();
+                        let gy = (idrag.cur_pt[1] - icon_sz * 0.5).round();
+                        c.round([gx, gy, gx + cell_w, gy + cell_h], 10.0, 0x162038, 195, false, false);
+                        c.round([gx, gy, gx + cell_w, gy + cell_h], 10.0, 0x7c9cff, 230, true, false);
+                        let path = self.entries[idrag.idx].path.clone();
+                        let name = self.entries[idrag.idx].name.clone();
+                        if let Some(img) = self.icon_for(&path) {
+                            let ix = (gx + (cell_w - icon_sz) * 0.5).round();
+                            c.image(img, [ix, gy + 6.0, ix + icon_sz, gy + 6.0 + icon_sz]);
+                        }
+                        text_draws.push((
+                            name,
+                            [
+                                ((gx + 2.0) * dpi).round() as i32,
+                                ((gy + 8.0 + icon_sz) * dpi).round() as i32,
+                                ((gx + cell_w - 2.0) * dpi).round() as i32,
+                                ((gy + cell_h - 1.0) * dpi).round() as i32,
+                            ],
+                            tile_font_px,
+                            600,
+                            0xffffff,
+                            DT_CENTER | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX,
+                        ));
+                    }
                 }
                 if let Some([sx, sy, cx, cy]) = self.marquee {
                     let ml = sx.min(cx);
@@ -921,6 +1194,27 @@ impl FenceWindow {
         }
     }
 
+    unsafe fn hit_slot(&self, lx: f32, ly: f32) -> Option<usize> {
+        if self.entries.is_empty() {
+            return None;
+        }
+        let spec = self.spec()?;
+        if spec.rolled_up || ly < HEADER_H {
+            return None;
+        }
+        let dpi = (GetDpiForWindow(self.hwnd).max(96) as f32) / 96.0;
+        let mut r: RECT = zeroed();
+        GetClientRect(self.hwnd, &mut r);
+        let w = r.right as f32 / dpi;
+        let (_, cell_w, cell_h) = cell_dims(&spec);
+        let cols = ((w - PAD_X * 2.0) / cell_w).floor().max(1.0) as usize;
+        let start_x = PAD_X + ((w - PAD_X * 2.0) - cols as f32 * cell_w) * 0.5;
+        let col = (((lx - start_x) / cell_w).floor().max(0.0) as usize).min(cols - 1);
+        let row = ((ly - HEADER_H - 6.0 + self.scroll_y) / cell_h).floor().max(0.0) as usize;
+        let idx = (row * cols + col).min(self.entries.len() - 1);
+        Some(idx)
+    }
+
     unsafe fn open_item(&self, idx: usize) {
         if let Some(entry) = self.entries.get(idx) {
             let p = wide(&entry.path);
@@ -979,6 +1273,36 @@ impl FenceWindow {
                 self.update_spec(|s| s.icon_size = sz);
                 InvalidateRect(self.hwnd, null(), 0);
             }
+            CMD_TEXT_11 | CMD_TEXT_13 | CMD_TEXT_15 | CMD_TEXT_17 => {
+                let tsz = match cmd {
+                    CMD_TEXT_11 => 11,
+                    CMD_TEXT_15 => 15,
+                    CMD_TEXT_17 => 17,
+                    _ => 13,
+                };
+                self.update_spec(|s| s.text_size = tsz);
+                InvalidateRect(self.hwnd, null(), 0);
+            }
+            CMD_VIEW_GRID | CMD_VIEW_GALLERY | CMD_VIEW_COMPACT => {
+                let vm = match cmd {
+                    CMD_VIEW_GALLERY => "gallery",
+                    CMD_VIEW_COMPACT => "compact",
+                    _ => "grid",
+                };
+                self.update_spec(|s| {
+                    s.view_mode = vm.into();
+                    if vm == "gallery" {
+                        s.show_thumbnails = true;
+                    }
+                });
+                self.scroll_y = 0.0;
+                InvalidateRect(self.hwnd, null(), 0);
+            }
+            CMD_TOGGLE_THUMBS => {
+                self.update_spec(|s| s.show_thumbnails = !s.show_thumbnails);
+                self.icons.clear();
+                InvalidateRect(self.hwnd, null(), 0);
+            }
             CMD_FILTER_ALL | CMD_FILTER_FOLDERS | CMD_FILTER_FILES => {
                 let flt = match cmd {
                     CMD_FILTER_FOLDERS => "folders",
@@ -996,6 +1320,15 @@ impl FenceWindow {
                 InvalidateRect(self.hwnd, null(), 0);
             }
             CMD_ROLL => self.toggle_roll(),
+            CMD_SORT_MANUAL => {
+                let order: Vec<String> = self.entries.iter().map(|e| e.file_key()).collect();
+                self.update_spec(|s| {
+                    s.sort_by = "manual".into();
+                    s.custom_order = order;
+                });
+                self.reload_entries();
+                InvalidateRect(self.hwnd, null(), 0);
+            }
             CMD_SORT_DATE => {
                 self.update_spec(|s| {
                     s.sort_by = "date".into();
@@ -1052,7 +1385,9 @@ unsafe fn run_context_menu(win: &RefCell<FenceWindow>, mut sx: i32, mut sy: i32)
         return;
     }
     let op_menu = CreatePopupMenu();
+    let view_menu = CreatePopupMenu();
     let icon_menu = CreatePopupMenu();
+    let text_menu = CreatePopupMenu();
     let flt_menu = CreatePopupMenu();
     let flag = |b: bool| MF_STRING | if b { MF_CHECKED } else { MF_UNCHECKED };
 
@@ -1063,9 +1398,21 @@ unsafe fn run_context_menu(win: &RefCell<FenceWindow>, mut sx: i32, mut sy: i32)
     AppendMenuW(op_menu, flag(spec.fade_on_hover && op_pct > 35 && op_pct < 99), CMD_OP_50, wide("50% (Half)").as_ptr());
     AppendMenuW(op_menu, flag(!spec.fade_on_hover || op_pct >= 99), CMD_OP_100, wide("100% (Always Clear)").as_ptr());
 
+    AppendMenuW(view_menu, flag(spec.view_mode == "grid" || spec.view_mode.is_empty()), CMD_VIEW_GRID, wide("Standard Grid").as_ptr());
+    AppendMenuW(view_menu, flag(spec.view_mode == "gallery"), CMD_VIEW_GALLERY, wide("Photo Gallery (Large Images)").as_ptr());
+    AppendMenuW(view_menu, flag(spec.view_mode == "compact"), CMD_VIEW_COMPACT, wide("Compact Tiles").as_ptr());
+    AppendMenuW(view_menu, MF_SEPARATOR, 0, null());
+    AppendMenuW(view_menu, flag(spec.show_thumbnails), CMD_TOGGLE_THUMBS, wide("Show Image Thumbnails").as_ptr());
+
     AppendMenuW(icon_menu, flag(spec.icon_size <= 26), CMD_ICON_24, wide("Small (24px)").as_ptr());
     AppendMenuW(icon_menu, flag(spec.icon_size > 26 && spec.icon_size < 40), CMD_ICON_32, wide("Normal (32px)").as_ptr());
     AppendMenuW(icon_menu, flag(spec.icon_size >= 40), CMD_ICON_48, wide("Large (48px)").as_ptr());
+
+    let ts = if spec.text_size <= 0 { 13 } else { spec.text_size };
+    AppendMenuW(text_menu, flag(ts <= 11), CMD_TEXT_11, wide("Small (11px)").as_ptr());
+    AppendMenuW(text_menu, flag(ts > 11 && ts <= 13), CMD_TEXT_13, wide("Normal (13px)").as_ptr());
+    AppendMenuW(text_menu, flag(ts > 13 && ts <= 15), CMD_TEXT_15, wide("Large (15px)").as_ptr());
+    AppendMenuW(text_menu, flag(ts >= 16), CMD_TEXT_17, wide("Extra Large (17px)").as_ptr());
 
     AppendMenuW(flt_menu, flag(spec.filter == "all"), CMD_FILTER_ALL, wide("Show All").as_ptr());
     AppendMenuW(flt_menu, flag(spec.filter == "folders"), CMD_FILTER_FOLDERS, wide("Folders Only").as_ptr());
@@ -1073,12 +1420,15 @@ unsafe fn run_context_menu(win: &RefCell<FenceWindow>, mut sx: i32, mut sy: i32)
     AppendMenuW(flt_menu, MF_SEPARATOR, 0, null());
     AppendMenuW(flt_menu, flag(spec.sort_by == "name"), CMD_SORT_NAME, wide("Sort by Name").as_ptr());
     AppendMenuW(flt_menu, flag(spec.sort_by == "date"), CMD_SORT_DATE, wide("Sort by Date (Newest First)").as_ptr());
+    AppendMenuW(flt_menu, flag(spec.sort_by == "manual"), CMD_SORT_MANUAL, wide("Manual Order (Drag Icons)").as_ptr());
     AppendMenuW(flt_menu, flag(spec.folders_first), CMD_FOLDERS_FIRST, wide("Folders First").as_ptr());
 
+    AppendMenuW(menu, MF_POPUP, view_menu as usize, wide("View Mode & Thumbnails").as_ptr());
+    AppendMenuW(menu, MF_POPUP, icon_menu as usize, wide("Icon Size").as_ptr());
+    AppendMenuW(menu, MF_POPUP, text_menu as usize, wide("Tile Text Size").as_ptr());
+    AppendMenuW(menu, MF_POPUP, flt_menu as usize, wide("Filter & Sort").as_ptr());
     AppendMenuW(menu, flag(spec.fade_on_hover), CMD_FADE, wide("Fade on Hover").as_ptr());
     AppendMenuW(menu, MF_POPUP, op_menu as usize, wide("Idle Opacity").as_ptr());
-    AppendMenuW(menu, MF_POPUP, icon_menu as usize, wide("Icon Size").as_ptr());
-    AppendMenuW(menu, MF_POPUP, flt_menu as usize, wide("Filter & Sort").as_ptr());
     AppendMenuW(menu, flag(spec.rolled_up), CMD_ROLL, wide("Roll Up to Title Bar").as_ptr());
     AppendMenuW(menu, MF_SEPARATOR, 0, null());
     AppendMenuW(menu, MF_STRING, CMD_OPEN_FOLDER, wide("Open Folder in Explorer").as_ptr());
@@ -1358,8 +1708,38 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             if let Some([sx, sy, wx, wy]) = b.dragging {
                 let dx = pt.x - sx;
                 let dy = pt.y - sy;
-                let nx = wx + dx;
-                let ny = wy + dy;
+                let raw_nx = wx + dx;
+                let raw_ny = wy + dy;
+                let mut cur_r: RECT = zeroed();
+                GetWindowRect(hwnd, &mut cur_r);
+                let fw = cur_r.right - cur_r.left;
+                let fh = cur_r.bottom - cur_r.top;
+                let mut others = Vec::new();
+                let wins = b.shared.borrow().windows.clone();
+                for ow in wins {
+                    if let Ok(ob) = ow.try_borrow() {
+                        if ob.hwnd != hwnd && ob.visible {
+                            let mut or: RECT = zeroed();
+                            GetWindowRect(ob.hwnd, &mut or);
+                            others.push([or.left, or.top, or.right, or.bottom]);
+                        }
+                    }
+                }
+                let mut work = [0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)];
+                let mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+                if !mon.is_null() {
+                    let mut mi: MONITORINFO = zeroed();
+                    mi.cbSize = size_of::<MONITORINFO>() as u32;
+                    if GetMonitorInfoW(mon, &mut mi) != 0 {
+                        work = [
+                            mi.rcWork.left,
+                            mi.rcWork.top,
+                            mi.rcWork.right,
+                            mi.rcWork.bottom,
+                        ];
+                    }
+                }
+                let [nx, ny] = snap_fence_position(raw_nx, raw_ny, fw, fh, &others, work);
                 SetWindowPos(hwnd, null_mut(), nx, ny, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
                 let dpi = (GetDpiForWindow(hwnd).max(96) as f32) / 96.0;
                 if let Some(sh) = &mut b.shadow {
@@ -1397,6 +1777,19 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             let dpi = (GetDpiForWindow(hwnd).max(96) as f32) / 96.0;
             let lx = (lp as i16) as f32 / dpi;
             let ly = ((lp >> 16) as i16) as f32 / dpi;
+            if let Some(mut idrag) = b.item_drag {
+                let dist = ((lx - idrag.start_pt[0]).powi(2) + (ly - idrag.start_pt[1]).powi(2)).sqrt();
+                if dist > 5.0 {
+                    idrag.active = true;
+                }
+                idrag.cur_pt = [lx, ly];
+                b.item_drag = Some(idrag);
+                if idrag.active {
+                    b.hover_item = b.hit_slot(lx, ly);
+                    b.paint();
+                }
+                return 0;
+            }
             if let Some([sx, sy, _, _]) = b.marquee {
                 b.marquee = Some([sx, sy, lx, ly]);
                 let ml = sx.min(lx);
@@ -1493,8 +1886,17 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 return 0;
             }
             if let Some(idx) = hit {
-                b.selected.clear();
-                b.selected.insert(idx);
+                if !b.selected.contains(&idx) {
+                    b.selected.clear();
+                    b.selected.insert(idx);
+                }
+                b.item_drag = Some(ItemDrag {
+                    idx,
+                    start_pt: [lx, ly],
+                    cur_pt: [lx, ly],
+                    active: false,
+                });
+                SetCapture(hwnd);
             } else {
                 b.selected.clear();
                 b.marquee = Some([lx, ly, lx, ly]);
@@ -1504,28 +1906,116 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             0
         }
         WM_LBUTTONUP => {
-            let mut b = win.borrow_mut();
-            let was_drag = b.dragging.take().is_some();
-            let was_resize = b.resizing.take().is_some();
-            let was_marquee = b.marquee.take().is_some();
-            if was_drag || was_resize || was_marquee {
-                ReleaseCapture();
-                if was_drag || was_resize {
-                    let mut wr: RECT = zeroed();
-                    GetWindowRect(hwnd, &mut wr);
-                    let dpi = (GetDpiForWindow(hwnd).max(96) as f32) / 96.0;
-                    b.update_spec(|s| {
-                        s.position = [wr.left, wr.top];
-                        if was_resize && !s.rolled_up {
-                            s.size = [
-                                ((wr.right - wr.left) as f32 / dpi).round() as i32,
-                                ((wr.bottom - wr.top) as f32 / dpi).round() as i32,
-                            ];
+            let mut cross_fence_move: Option<(Rc<RefCell<FenceWindow>>, Vec<PathBuf>, String)> = None;
+            {
+                let mut b = win.borrow_mut();
+                if let Some(idrag) = b.item_drag.take() {
+                    ReleaseCapture();
+                    if idrag.active && idrag.idx < b.entries.len() {
+                        let mut pt: POINT = zeroed();
+                        GetCursorPos(&mut pt);
+                        let mut my_wr: RECT = zeroed();
+                        GetWindowRect(hwnd, &mut my_wr);
+                        let inside_self = pt.x >= my_wr.left
+                            && pt.x <= my_wr.right
+                            && pt.y >= my_wr.top
+                            && pt.y <= my_wr.bottom;
+                        if inside_self {
+                            if let Some(dst_idx) = b.hit_slot(idrag.cur_pt[0], idrag.cur_pt[1]) {
+                                let order = reorder_entries_by_index(&mut b.entries, idrag.idx, dst_idx);
+                                b.selected.clear();
+                                b.selected.insert(dst_idx);
+                                b.update_spec(|s| {
+                                    s.sort_by = "manual".into();
+                                    s.custom_order = order;
+                                });
+                            }
+                        } else {
+                            let wins = b.shared.borrow().windows.clone();
+                            let mut target_win = None;
+                            let mut target_folder = String::new();
+                            for ow in wins {
+                                if let Ok(ob) = ow.try_borrow() {
+                                    if ob.hwnd != hwnd && ob.visible {
+                                        let mut or: RECT = zeroed();
+                                        GetWindowRect(ob.hwnd, &mut or);
+                                        if pt.x >= or.left
+                                            && pt.x <= or.right
+                                            && pt.y >= or.top
+                                            && pt.y <= or.bottom
+                                        {
+                                            if let Some(ospec) = ob.spec() {
+                                                target_folder = ospec.folder;
+                                                target_win = Some(Rc::clone(&ow));
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if let Some(tw) = target_win {
+                                let mut paths = Vec::new();
+                                if b.selected.len() > 1 && b.selected.contains(&idrag.idx) {
+                                    let mut idxs: Vec<usize> = b.selected.iter().copied().collect();
+                                    idxs.sort_unstable();
+                                    for i in idxs {
+                                        if let Some(e) = b.entries.get(i) {
+                                            paths.push(e.path.clone());
+                                        }
+                                    }
+                                } else if let Some(e) = b.entries.get(idrag.idx) {
+                                    paths.push(e.path.clone());
+                                }
+                                cross_fence_move = Some((tw, paths, target_folder));
+                            }
                         }
-                    });
-                    b.background_key.clear();
+                    }
+                    b.paint();
+                } else {
+                    let was_drag = b.dragging.take().is_some();
+                    let was_resize = b.resizing.take().is_some();
+                    let was_marquee = b.marquee.take().is_some();
+                    if was_drag || was_resize || was_marquee {
+                        ReleaseCapture();
+                        if was_drag || was_resize {
+                            let mut wr: RECT = zeroed();
+                            GetWindowRect(hwnd, &mut wr);
+                            let dpi = (GetDpiForWindow(hwnd).max(96) as f32) / 96.0;
+                            b.update_spec(|s| {
+                                s.position = [wr.left, wr.top];
+                                if was_resize && !s.rolled_up {
+                                    s.size = [
+                                        ((wr.right - wr.left) as f32 / dpi).round() as i32,
+                                        ((wr.bottom - wr.top) as f32 / dpi).round() as i32,
+                                    ];
+                                }
+                            });
+                            b.background_key.clear();
+                        }
+                        b.paint();
+                    }
                 }
-                b.paint();
+            }
+            if let Some((target_win, paths, dst_folder)) = cross_fence_move {
+                let dst_dir = Path::new(&dst_folder);
+                let mut any_moved = false;
+                for p in paths {
+                    if move_entry_to_folder(&p, dst_dir).is_ok() {
+                        any_moved = true;
+                    }
+                }
+                if any_moved {
+                    {
+                        let mut b = win.borrow_mut();
+                        b.selected.clear();
+                        b.reload_entries();
+                        b.paint();
+                    }
+                    if let Ok(mut ob) = target_win.try_borrow_mut() {
+                        ob.reload_entries();
+                        ob.paint();
+                    }
+                }
             }
             0
         }
@@ -1540,6 +2030,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         }
         WM_LBUTTONDBLCLK => {
             let mut b = win.borrow_mut();
+            b.item_drag = None;
             let dpi = (GetDpiForWindow(hwnd).max(96) as f32) / 96.0;
             let lx = (lp as i16) as f32 / dpi;
             let ly = ((lp >> 16) as i16) as f32 / dpi;
@@ -1692,5 +2183,52 @@ mod tests {
                 DestroyWindow(h);
             }
         }
+    }
+
+    #[test]
+    fn test_magnetic_fence_corner_and_edge_snapping() {
+        let others = [
+            [20, 740, 360, 990],  // Web fence
+            [372, 740, 712, 990], // Games fence
+        ];
+        let work = [0, 0, 1920, 1040];
+
+        // Dragging near the right of Games fence (x=712 + 12px gap = 724) and near top corner y=740
+        let snapped = snap_fence_position(730, 746, 420, 250, &others, work);
+        assert_eq!(snapped, [724, 740], "must magnetically snap to 12px gap + top corner alignment");
+
+        // Dragging above Web fence (left edge near 20, bottom near 740 - 12px gap - 340h = 388)
+        let snapped_above = snap_fence_position(25, 393, 380, 340, &others, work);
+        assert_eq!(snapped_above, [20, 388], "must magnetically align left edges and 12px vertical gap");
+    }
+
+    #[test]
+    fn test_reorder_items_and_image_thumbnail_generation() {
+        let mut entries = vec![
+            FenceEntry {
+                name: "Alpha".into(),
+                path: PathBuf::from(r"C:\test\alpha.lnk"),
+                is_dir: false,
+                modified: SystemTime::UNIX_EPOCH,
+            },
+            FenceEntry {
+                name: "Beta".into(),
+                path: PathBuf::from(r"C:\test\beta.lnk"),
+                is_dir: false,
+                modified: SystemTime::UNIX_EPOCH,
+            },
+            FenceEntry {
+                name: "Gamma".into(),
+                path: PathBuf::from(r"C:\test\gamma.lnk"),
+                is_dir: false,
+                modified: SystemTime::UNIX_EPOCH,
+            },
+        ];
+        let order = reorder_entries_by_index(&mut entries, 0, 2);
+        assert_eq!(
+            order,
+            vec!["beta.lnk".to_string(), "gamma.lnk".to_string(), "alpha.lnk".to_string()]
+        );
+        assert_eq!(entries[2].name, "Alpha");
     }
 }

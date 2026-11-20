@@ -15,6 +15,10 @@ pub struct FenceSpec {
     pub sort_by: String,
     pub sort_desc: bool,
     pub icon_size: i32,
+    pub text_size: i32,
+    pub view_mode: String,
+    pub show_thumbnails: bool,
+    pub custom_order: Vec<String>,
     pub filter: String,
     pub folders_first: bool,
     pub visible: bool,
@@ -34,6 +38,10 @@ impl Default for FenceSpec {
             sort_by: "name".into(),
             sort_desc: false,
             icon_size: 32,
+            text_size: 13,
+            view_mode: "grid".into(),
+            show_thumbnails: true,
+            custom_order: Vec::new(),
             filter: "all".into(),
             folders_first: true,
             visible: true,
@@ -80,6 +88,7 @@ fn default_fences() -> Vec<FenceSpec> {
     let mut out = Vec::new();
     for (id, title, path, pos, size, fade, sort_by, sort_desc) in candidates {
         if path.is_dir() {
+            let is_img = id == "images";
             out.push(FenceSpec {
                 id: id.into(),
                 title: title.into(),
@@ -91,7 +100,11 @@ fn default_fences() -> Vec<FenceSpec> {
                 rolled_up: false,
                 sort_by: sort_by.into(),
                 sort_desc,
-                icon_size: 32,
+                icon_size: if is_img { 48 } else { 32 },
+                text_size: 13,
+                view_mode: if is_img { "gallery".into() } else { "grid".into() },
+                show_thumbnails: true,
+                custom_order: Vec::new(),
                 filter: "all".into(),
                 folders_first: true,
                 visible: true,
@@ -111,6 +124,10 @@ fn default_fences() -> Vec<FenceSpec> {
             sort_by: "name".into(),
             sort_desc: false,
             icon_size: 32,
+            text_size: 13,
+            view_mode: "grid".into(),
+            show_thumbnails: true,
+            custom_order: Vec::new(),
             filter: "all".into(),
             folders_first: true,
             visible: true,
