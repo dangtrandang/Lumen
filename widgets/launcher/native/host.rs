@@ -117,6 +117,13 @@ enum Icon {
     Image(render::Image),
     Shell(HICON),
 }
+pub(crate) const TOGGLE_QUICK_HIDE: u32 = WM_APP + 210;
+static HOST_HWND: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+
+pub(crate) fn host_hwnd() -> HWND {
+    HOST_HWND.load(std::sync::atomic::Ordering::Relaxed) as HWND
+}
+
 struct App {
     frame: Option<crate::compositor::Buffer>,
     window_shadow: Option<crate::compositor::WindowShadow>,
@@ -183,6 +190,8 @@ struct App {
     status_ticks: u8,
     dpi: f32,
     smoke: bool,
+    quick_hidden_widgets: Vec<String>,
+    quick_hidden_launcher: bool,
     inspect: bool,
     keyboard_selection: bool,
     glass: std::rc::Rc<RefCell<Glass>>,
@@ -2269,13 +2278,40 @@ unsafe extern "system" fn wndproc(
             }
             0
         }
+        TOGGLE_QUICK_HIDE => {
+            if app.quick_hidden_widgets.is_empty() && !app.quick_hidden_launcher {
+                if IsWindowVisible(hwnd) != 0 {
+                    app.quick_hidden_launcher = true;
+                    ShowWindow(hwnd, SW_HIDE);
+                }
+                for id in app.packages.ids() {
+                    if app.packages.host(&id).is_some_and(|h| h.visible()) {
+                        app.quick_hidden_widgets.push(id.clone());
+                        if let Some(h) = app.packages.host_mut(&id) {
+                            h.hide();
+                        }
+                    }
+                }
+            } else {
+                if app.quick_hidden_launcher {
+                    app.quick_hidden_launcher = false;
+                    ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                }
+                for id in std::mem::take(&mut app.quick_hidden_widgets) {
+                    if let Some(h) = app.packages.host_mut(&id) {
+                        h.show();
+                    }
+                }
+            }
+            0
+        }
         crate::tray::MESSAGE => {
             let action = match lparam as u32 {
-                WM_LBUTTONUP | WM_LBUTTONDBLCLK => 1,
+                WM_LBUTTONUP | WM_LBUTTONDBLCLK => 8,
                 WM_RBUTTONUP => app.tray.as_ref().map_or(0, |t| t.menu()),
                 _ => 0,
             };
-            if action == 1 || action == 2 {
+            if action == 2 {
                 ShowWindow(hwnd, SW_SHOWNORMAL);
                 SetForegroundWindow(hwnd);
                 SetWindowPos(
@@ -2288,8 +2324,6 @@ unsafe extern "system" fn wndproc(
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
                 );
                 InvalidateRect(hwnd, null(), 0);
-            }
-            if action == 2 {
                 app.open_settings(hwnd);
             }
             if action == 5 {
@@ -3236,6 +3270,8 @@ pub fn run() -> Result<(), String> {
             status_ticks: 0,
             dpi: 1.0,
             smoke,
+            quick_hidden_widgets: Vec::new(),
+            quick_hidden_launcher: false,
             inspect,
             keyboard_selection: false,
             started: std::time::Instant::now(),
@@ -3291,6 +3327,7 @@ pub fn run() -> Result<(), String> {
             CloseHandle(mutex);
             return Err(std::io::Error::last_os_error().to_string());
         }
+        HOST_HWND.store(hwnd as isize, std::sync::atomic::Ordering::Relaxed);
         crate::fusion::init(app.borrow().glass.clone());
         ShowWindow(
             hwnd,

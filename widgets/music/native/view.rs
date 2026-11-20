@@ -299,7 +299,7 @@ impl State {
     }
     unsafe fn draw_header(&mut self, dc: HDC, w: f32) {
         use crate::settings_ui::{widget_header_hits, HeaderAction};
-        if !self.playback.signed_in {
+        if !self.playback.signed_in && self.playback.title.trim().is_empty() {
             let right = if w < 220. { 76. } else { 80. };
             let r = [18., 14., right, 40.];
             let c = Canvas::new(dc, self.dpi);

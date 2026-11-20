@@ -224,48 +224,6 @@ impl Host {
             ),
             Row::slider(17, "Blur size", self.config.blur, 0., 80., "px"),
         ]);
-        const UPDATE_ACCENT: u32 = 0xe5881e;
-        rows.push(Row::section("Updates"));
-        if self.update_rx.is_none() {
-            rows.push(Row::button(7, "Check for updates"));
-            if let Some(release) = &self.update_candidate {
-                if crate::update::portable(&self.root) && !crate::update::pending(&self.root) {
-                    rows.push(Row::accent_button(
-                        8,
-                        format!("Update Now · v{}", release.version),
-                        UPDATE_ACCENT,
-                    ));
-                    rows.push(Row::button(
-                        14,
-                        format!("Download v{} Package", release.version),
-                    ));
-                } else if !crate::update::portable(&self.root) {
-                    rows.push(Row::accent_button(
-                        14,
-                        format!("Download v{} Package", release.version),
-                        UPDATE_ACCENT,
-                    ));
-                }
-            }
-            if crate::update::pending(&self.root) {
-                rows.push(Row::accent_button(
-                    9,
-                    "Restart and Apply Update",
-                    UPDATE_ACCENT,
-                ));
-            }
-            rows.push(Row::button(10, "Open GitHub Releases"));
-        }
-        if !self.update_status.is_empty() {
-            if self.update_candidate.is_some()
-                || crate::update::pending(&self.root)
-                || self.update_rx.is_some()
-            {
-                rows.push(Row::highlight_note(&self.update_status, UPDATE_ACCENT));
-            } else {
-                rows.push(Row::note(&self.update_status));
-            }
-        }
         if !self.error.is_empty() {
             rows.push(Row::note(&self.error));
         }

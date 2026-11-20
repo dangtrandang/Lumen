@@ -92,6 +92,7 @@ struct SharedState {
     prev_lbtn_down: bool,
     last_desk_click_ms: Option<Instant>,
     last_desk_click_pt: [i32; 2],
+    desk_drag_start: Option<[i32; 2]>,
     windows: Vec<Rc<RefCell<FenceWindow>>>,
 }
 
@@ -114,6 +115,8 @@ struct FenceWindow {
     hover_roll: bool,
     selected: HashSet<usize>,
     marquee: Option<[f32; 4]>,
+    group_selected: bool,
+    group_drag: Vec<(Rc<RefCell<FenceWindow>>, i32, i32)>,
     scroll_y: f32,
     alpha_tween: Tween,
     started: Instant,
@@ -184,6 +187,7 @@ impl Host {
             prev_lbtn_down: false,
             last_desk_click_ms: None,
             last_desk_click_pt: [0, 0],
+            desk_drag_start: None,
             windows: Vec::new(),
         }));
         let mut windows = Vec::new();
@@ -309,6 +313,8 @@ unsafe fn create_fence_window(
         hover_roll: false,
         selected: HashSet::new(),
         marquee: None,
+        group_selected: false,
+        group_drag: Vec::new(),
         scroll_y: 0.0,
         alpha_tween: Tween::fixed(initial_alpha),
         started: Instant::now(),
@@ -615,8 +621,12 @@ impl FenceWindow {
             let c = Canvas::new(frame.dc, dpi);
             // Dark smoked-glass tint so icons & text stay crisp over bright wallpapers
             c.round([0.0, 0.0, w, h], RADIUS, 0x0b0f1c, 145, false, false);
-            // Subtle outer rim
-            c.round([0.5, 0.5, w - 0.5, h - 0.5], RADIUS, 0xffffff, 38, true, false);
+            // Subtle outer rim (or bright blue when group-selected from desktop)
+            if self.group_selected {
+                c.round([1.0, 1.0, w - 1.0, h - 1.0], RADIUS, 0x7c9cff, 220, true, false);
+            } else {
+                c.round([0.5, 0.5, w - 0.5, h - 0.5], RADIUS, 0xffffff, 38, true, false);
+            }
             // Header tint
             c.round([1.0, 1.0, w - 1.0, HEADER_H], RADIUS, 0x05070e, 90, false, false);
             // Title
@@ -716,13 +726,6 @@ impl FenceWindow {
                 wrap: *wrap,
                 trim_ellipsis: true,
             };
-            let shadow_rect = [
-                (rect[0] * dpi).round(),
-                (rect[1] * dpi + 1.0).round(),
-                (rect[2] * dpi).round(),
-                (rect[3] * dpi + 1.0).round(),
-            ];
-            d2d::draw_text_dc(frame.dc, r.right, r.bottom, txt, shadow_rect, &style, 0x000000, 170);
             let px_rect = [
                 (rect[0] * dpi).round(),
                 (rect[1] * dpi).round(),
@@ -961,11 +964,13 @@ unsafe fn poll_desktop_double_click(shared: &Rc<RefCell<SharedState>>) {
     let mut pt: POINT = zeroed();
     GetCursorPos(&mut pt);
     let mut toggle = false;
+    let mut select_rect: Option<[i32; 4]> = None;
+    let mut clear_group = false;
     {
         let mut sh = shared.borrow_mut();
         let was_down = sh.prev_lbtn_down;
         sh.prev_lbtn_down = down;
-        if down && !was_down {
+        let is_desktop_pt = || -> bool {
             let target = WindowFromPoint(pt);
             let mut cls = [0u16; 64];
             let len = if !target.is_null() {
@@ -974,11 +979,15 @@ unsafe fn poll_desktop_double_click(shared: &Rc<RefCell<SharedState>>) {
                 0
             };
             let name = String::from_utf16_lossy(&cls[..len]);
-            let is_desktop = matches!(
+            matches!(
                 name.as_str(),
                 "Progman" | "WorkerW" | "SHELLDLL_DefView" | "SysListView32"
-            );
-            if is_desktop {
+            )
+        };
+        if down && !was_down {
+            if is_desktop_pt() {
+                sh.desk_drag_start = Some([pt.x, pt.y]);
+                clear_group = true;
                 let now = Instant::now();
                 let dbl_ms = GetDoubleClickTime() as u128;
                 let is_dbl = sh.last_desk_click_ms.is_some_and(|prev| {
@@ -988,6 +997,7 @@ unsafe fn poll_desktop_double_click(shared: &Rc<RefCell<SharedState>>) {
                 });
                 if is_dbl {
                     sh.last_desk_click_ms = None;
+                    sh.desk_drag_start = None;
                     sh.quick_hidden = !sh.quick_hidden;
                     toggle = true;
                 } else {
@@ -996,10 +1006,47 @@ unsafe fn poll_desktop_double_click(shared: &Rc<RefCell<SharedState>>) {
                 }
             } else {
                 sh.last_desk_click_ms = None;
+                sh.desk_drag_start = None;
+            }
+        } else if !down && was_down {
+            if let Some([sx, sy]) = sh.desk_drag_start.take() {
+                if (pt.x - sx).abs() > 14 || (pt.y - sy).abs() > 14 {
+                    select_rect = Some([sx.min(pt.x), sy.min(pt.y), sx.max(pt.x), sy.max(pt.y)]);
+                }
+            }
+        }
+    }
+    if clear_group {
+        let wins = shared.borrow().windows.clone();
+        for w in wins {
+            let mut b = w.borrow_mut();
+            if b.group_selected {
+                b.group_selected = false;
+                InvalidateRect(b.hwnd, null(), 0);
+            }
+        }
+    }
+    if let Some([ml, mt, mr, mb]) = select_rect {
+        let wins = shared.borrow().windows.clone();
+        for w in wins {
+            let mut b = w.borrow_mut();
+            if !b.visible {
+                continue;
+            }
+            let mut wr: RECT = zeroed();
+            GetWindowRect(b.hwnd, &mut wr);
+            if wr.right >= ml && wr.left <= mr && wr.bottom >= mt && wr.top <= mb {
+                b.group_selected = true;
+                InvalidateRect(b.hwnd, null(), 0);
             }
         }
     }
     if toggle {
+        let dock_hwnd = crate::window::host_hwnd();
+        if !dock_hwnd.is_null() {
+            PostMessageW(dock_hwnd, crate::window::TOGGLE_QUICK_HIDE, 0, 0);
+            return;
+        }
         let (hidden, wins) = {
             let sh = shared.borrow();
             (sh.quick_hidden, sh.windows.clone())
@@ -1085,12 +1132,22 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             let mut pt: POINT = zeroed();
             GetCursorPos(&mut pt);
             if let Some([sx, sy, wx, wy]) = b.dragging {
-                let nx = wx + (pt.x - sx);
-                let ny = wy + (pt.y - sy);
+                let dx = pt.x - sx;
+                let dy = pt.y - sy;
+                let nx = wx + dx;
+                let ny = wy + dy;
                 SetWindowPos(hwnd, null_mut(), nx, ny, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
                 let dpi = b.shared.borrow().dpi;
                 if let Some(sh) = &mut b.shadow {
                     sh.sync(hwnd, dpi, 255);
+                }
+                for (ow, ox, oy) in &b.group_drag {
+                    let mut ob = ow.borrow_mut();
+                    let ohwnd = ob.hwnd;
+                    SetWindowPos(ohwnd, null_mut(), ox + dx, oy + dy, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                    if let Some(sh) = &mut ob.shadow {
+                        sh.sync(ohwnd, dpi, 255);
+                    }
                 }
                 return 0;
             }
@@ -1243,6 +1300,19 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 GetCursorPos(&mut pt);
                 GetWindowRect(hwnd, &mut wr);
                 b.dragging = Some([pt.x, pt.y, wr.left, wr.top]);
+                b.group_drag.clear();
+                if b.group_selected {
+                    let wins = b.shared.borrow().windows.clone();
+                    for ow in wins {
+                        let ob = ow.borrow();
+                        if ob.hwnd != hwnd && ob.group_selected && ob.visible {
+                            let mut owr: RECT = zeroed();
+                            GetWindowRect(ob.hwnd, &mut owr);
+                            drop(ob);
+                            b.group_drag.push((ow, owr.left, owr.top));
+                        }
+                    }
+                }
                 SetCapture(hwnd);
                 return 0;
             }
@@ -1262,6 +1332,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             let was_drag = b.dragging.take().is_some();
             let was_resize = b.resizing.take().is_some();
             let was_marquee = b.marquee.take().is_some();
+            let gdrag = std::mem::take(&mut b.group_drag);
             if was_drag || was_resize || was_marquee {
                 ReleaseCapture();
                 if was_drag || was_resize {
@@ -1278,6 +1349,14 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                         }
                     });
                     b.background_key.clear();
+                    for (ow, _, _) in gdrag {
+                        let mut ob = ow.borrow_mut();
+                        let mut owr: RECT = zeroed();
+                        GetWindowRect(ob.hwnd, &mut owr);
+                        ob.update_spec(|s| s.position = [owr.left, owr.top]);
+                        ob.background_key.clear();
+                        ob.paint();
+                    }
                 }
                 b.paint();
             }

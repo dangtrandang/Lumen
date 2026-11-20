@@ -160,14 +160,8 @@ impl Tray {
     }
     pub unsafe fn menu(&self) -> u32 {
         let menu = CreatePopupMenu();
-        let update_label = if self.update_available {
-            "Update now"
-        } else {
-            "Check for updates"
-        };
         for (id, label) in [
             (8, "General Settings / Widget Manager"),
-            (11, update_label),
             (10, "Open Log"),
             (3, "Quit Lumen"),
         ] {
