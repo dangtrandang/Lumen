@@ -22,21 +22,36 @@ use std::{
 use windows_sys::Win32::{
     Foundation::*,
     Graphics::Gdi::*,
-    System::{LibraryLoader::GetModuleHandleW, Threading::GetCurrentProcessId},
+    System::{
+        Com::{
+            CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_INPROC_SERVER,
+            COINIT_APARTMENTTHREADED,
+        },
+        LibraryLoader::GetModuleHandleW,
+        Threading::GetCurrentProcessId,
+    },
     UI::{
-        Controls::WM_MOUSELEAVE,
+        Controls::{
+            Dialogs::{
+                GetOpenFileNameW, OPENFILENAMEW, OFN_ALLOWMULTISELECT, OFN_EXPLORER,
+                OFN_FILEMUSTEXIST, OFN_NOCHANGEDIR, OFN_NODEREFERENCELINKS, OFN_PATHMUSTEXIST,
+            },
+            WM_MOUSELEAVE,
+        },
         HiDpi::*,
         Input::{
             GetRawInputData, RegisterRawInputDevices, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE,
             RAWINPUTHEADER, RIDEV_INPUTSINK, RID_INPUT, RIM_TYPEMOUSE,
             KeyboardAndMouse::{
-                GetDoubleClickTime, ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE,
-                TRACKMOUSEEVENT,
+                GetDoubleClickTime, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent,
+                TME_LEAVE, TRACKMOUSEEVENT, VK_DELETE,
             },
         },
         Shell::{
-            SHGetFileInfoW, SHGetImageList, ShellExecuteW, SHFILEINFOW, SHGFI_ICON,
-            SHGFI_LARGEICON, SHGFI_SYSICONINDEX, SHIL_EXTRALARGE,
+            BIF_NEWDIALOGSTYLE, BIF_RETURNONLYFSDIRS, BROWSEINFOW, DragAcceptFiles, DragFinish,
+            DragQueryFileW, HDROP, SHBrowseForFolderW, SHFILEINFOW, SHFILEOPSTRUCTW,
+            SHFileOperationW, SHGFI_ICON, SHGFI_LARGEICON, SHGFI_SYSICONINDEX, SHGetFileInfoW,
+            SHGetImageList, SHGetPathFromIDListW, SHIL_EXTRALARGE, ShellExecuteW,
         },
         WindowsAndMessaging::*,
     },
@@ -84,6 +99,16 @@ const CMD_VIEW_GRID: usize = 1050;
 const CMD_VIEW_GALLERY: usize = 1051;
 const CMD_VIEW_COMPACT: usize = 1052;
 const CMD_TOGGLE_THUMBS: usize = 1053;
+
+const CMD_ADD_FILES: usize = 1060;
+const CMD_ADD_FOLDER_LINK: usize = 1061;
+const CMD_MOVE_FOLDER_IN: usize = 1062;
+const CMD_NEW_SUBFOLDER: usize = 1063;
+const CMD_NEW_FENCE_FROM_FOLDER: usize = 1064;
+
+const CMD_ITEM_OPEN: usize = 1070;
+const CMD_ITEM_REVEAL: usize = 1071;
+const CMD_ITEM_DELETE: usize = 1072;
 
 fn cell_dims(spec: &FenceSpec) -> (f32, f32, f32) {
     let base_icon = match spec.view_mode.as_str() {
@@ -356,6 +381,207 @@ pub fn move_entry_to_folder(src: &Path, dst_folder: &Path) -> Result<PathBuf, St
     Ok(dst)
 }
 
+/// Creates a Windows `.lnk` shell shortcut at `lnk_path` pointing to `target` (file, `.exe`, or folder).
+pub unsafe fn create_shell_shortcut(target: &Path, lnk_path: &Path) -> Result<PathBuf, String> {
+    if let Some(parent) = lnk_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let init = CoInitializeEx(null(), COINIT_APARTMENTTHREADED as u32) >= 0;
+    let clsid_shell_link =
+        windows_sys::core::GUID::from_u128(0x00021401_0000_0000_c000_000000000046);
+    let iid_shell_link_w =
+        windows_sys::core::GUID::from_u128(0x000214f9_0000_0000_c000_000000000046);
+    let iid_persist_file =
+        windows_sys::core::GUID::from_u128(0x0000010b_0000_0000_c000_000000000046);
+
+    let mut psl: *mut std::ffi::c_void = null_mut();
+    let hr = CoCreateInstance(
+        &clsid_shell_link,
+        null_mut(),
+        CLSCTX_INPROC_SERVER,
+        &iid_shell_link_w,
+        &mut psl,
+    );
+    if hr < 0 || psl.is_null() {
+        if init {
+            CoUninitialize();
+        }
+        return Err(format!("CoCreateInstance(IShellLinkW) failed: {hr:#x}"));
+    }
+
+    type QueryInterfaceFn = unsafe extern "system" fn(
+        *mut std::ffi::c_void,
+        *const windows_sys::core::GUID,
+        *mut *mut std::ffi::c_void,
+    ) -> i32;
+    type ReleaseFn = unsafe extern "system" fn(*mut std::ffi::c_void) -> u32;
+    type SetStrFn = unsafe extern "system" fn(*mut std::ffi::c_void, *const u16) -> i32;
+    type SaveFn = unsafe extern "system" fn(*mut std::ffi::c_void, *const u16, i32) -> i32;
+
+    let sl_vtbl = *(psl as *const *const usize);
+    let query_interface: QueryInterfaceFn = std::mem::transmute(*sl_vtbl.add(0));
+    let sl_release: ReleaseFn = std::mem::transmute(*sl_vtbl.add(2));
+    let set_working_dir: SetStrFn = std::mem::transmute(*sl_vtbl.add(9));
+    let set_path: SetStrFn = std::mem::transmute(*sl_vtbl.add(20));
+
+    let wtarget = wide(target);
+    let _ = set_path(psl, wtarget.as_ptr());
+    let work_dir = if target.is_dir() {
+        Some(target.to_path_buf())
+    } else {
+        target.parent().map(Path::to_path_buf)
+    };
+    if let Some(wd) = work_dir {
+        let wdir = wide(&wd);
+        let _ = set_working_dir(psl, wdir.as_ptr());
+    }
+
+    let mut ppf: *mut std::ffi::c_void = null_mut();
+    let qhr = query_interface(psl, &iid_persist_file, &mut ppf);
+    let mut saved_ok = false;
+    if qhr >= 0 && !ppf.is_null() {
+        let pf_vtbl = *(ppf as *const *const usize);
+        let pf_release: ReleaseFn = std::mem::transmute(*pf_vtbl.add(2));
+        let pf_save: SaveFn = std::mem::transmute(*pf_vtbl.add(6));
+        let wlnk = wide(lnk_path);
+        saved_ok = pf_save(ppf, wlnk.as_ptr(), 1) >= 0;
+        let _ = pf_release(ppf);
+    }
+    let _ = sl_release(psl);
+    if init {
+        CoUninitialize();
+    }
+    if saved_ok && lnk_path.exists() {
+        Ok(lnk_path.to_path_buf())
+    } else {
+        Err("IPersistFile::Save failed".into())
+    }
+}
+
+fn unique_dest_path(dst_folder: &Path, base_name: &str, ext_with_dot: &str) -> PathBuf {
+    let first = dst_folder.join(format!("{base_name}{ext_with_dot}"));
+    if !first.exists() {
+        return first;
+    }
+    for n in 2..999 {
+        let cand = dst_folder.join(format!("{base_name} ({n}){ext_with_dot}"));
+        if !cand.exists() {
+            return cand;
+        }
+    }
+    first
+}
+
+/// Imports an external file, `.exe` program, `.lnk` shortcut, or folder into `dst_folder`.
+/// - If `prefer_shortcut` is true or `src` is an installed `.exe` outside Desktop, creates a `.lnk` shortcut.
+/// - If `src` is a `.lnk`/`.url` outside Desktop, copies the shortcut into `dst_folder`.
+/// - Otherwise tries moving `src` into `dst_folder`, falling back to file copy or folder `.lnk` shortcut across drives.
+pub unsafe fn import_external_path_into_fence(
+    src: &Path,
+    dst_folder: &Path,
+    prefer_shortcut: bool,
+) -> Result<PathBuf, String> {
+    if !src.exists() {
+        return Err("source path does not exist".into());
+    }
+    std::fs::create_dir_all(dst_folder).map_err(|e| e.to_string())?;
+    if src.parent().is_some_and(|p| p == dst_folder) {
+        return Ok(src.to_path_buf());
+    }
+    let file_name = src
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| "invalid file name".to_string())?;
+    let ext_lower = src
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let from_desktop = src
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.eq_ignore_ascii_case("Desktop"));
+
+    if prefer_shortcut || (ext_lower == "exe" && !from_desktop) {
+        let stem = if src.is_dir() {
+            file_name
+        } else {
+            src.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(file_name)
+        };
+        let lnk_dst = unique_dest_path(dst_folder, stem, ".lnk");
+        return create_shell_shortcut(src, &lnk_dst);
+    }
+
+    let dst = dst_folder.join(file_name);
+    if matches!(ext_lower.as_str(), "lnk" | "url") && !from_desktop {
+        let target_dst = if dst.exists() {
+            let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or(file_name);
+            unique_dest_path(dst_folder, stem, &format!(".{ext_lower}"))
+        } else {
+            dst
+        };
+        std::fs::copy(src, &target_dst).map_err(|e| e.to_string())?;
+        return Ok(target_dst);
+    }
+
+    if !dst.exists() && std::fs::rename(src, &dst).is_ok() {
+        return Ok(dst);
+    }
+
+    if src.is_file() {
+        let target_dst = if dst.exists() {
+            let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or(file_name);
+            let dot_ext = if ext_lower.is_empty() {
+                String::new()
+            } else {
+                format!(".{ext_lower}")
+            };
+            unique_dest_path(dst_folder, stem, &dot_ext)
+        } else {
+            dst
+        };
+        std::fs::copy(src, &target_dst).map_err(|e| e.to_string())?;
+        return Ok(target_dst);
+    }
+
+    let lnk_dst = unique_dest_path(dst_folder, file_name, ".lnk");
+    create_shell_shortcut(src, &lnk_dst)
+}
+
+pub fn create_new_subfolder(dst_folder: &Path) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(dst_folder).map_err(|e| e.to_string())?;
+    let path = unique_dest_path(dst_folder, "New Folder", "");
+    std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
+/// Moves `path` (file, shortcut, or folder) to the Windows Recycle Bin,
+/// falling back to `remove_file` / `remove_dir_all` if Recycle Bin is unavailable.
+pub unsafe fn delete_entry_path(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let mut double_null = wide(path);
+    double_null.push(0);
+    let mut op: SHFILEOPSTRUCTW = zeroed();
+    op.wFunc = 3; // FO_DELETE
+    op.pFrom = double_null.as_ptr();
+    // FOF_ALLOWUNDO (0x40) | FOF_NOCONFIRMATION (0x10) | FOF_NOERRORUI (0x400) | FOF_SILENT (0x04)
+    op.fFlags = 0x0454;
+    let rc = SHFileOperationW(&mut op);
+    if rc == 0 && !path.exists() {
+        return Ok(());
+    }
+    if path.is_dir() {
+        std::fs::remove_dir_all(path).map_err(|e| e.to_string())
+    } else {
+        std::fs::remove_file(path).map_err(|e| e.to_string())
+    }
+}
+
 #[derive(Clone, Copy)]
 struct ItemDrag {
     idx: usize,
@@ -395,6 +621,7 @@ struct FenceWindow {
     hovered: bool,
     hover_item: Option<usize>,
     hover_roll: bool,
+    hover_add: bool,
     selected: HashSet<usize>,
     marquee: Option<[f32; 4]>,
     item_drag: Option<ItemDrag>,
@@ -682,6 +909,7 @@ unsafe fn create_fence_window(
         hovered: false,
         hover_item: None,
         hover_roll: false,
+        hover_add: false,
         selected: HashSet::new(),
         marquee: None,
         item_drag: None,
@@ -720,6 +948,9 @@ unsafe fn create_fence_window(
         return Err(std::io::Error::last_os_error().to_string());
     }
     win.borrow_mut().hwnd = hwnd;
+    DragAcceptFiles(hwnd, 1);
+    let _ = ChangeWindowMessageFilterEx(hwnd, WM_DROPFILES, 1, null_mut());
+    let _ = ChangeWindowMessageFilterEx(hwnd, 0x0049, 1, null_mut());
     crate::desktop_layer::register(hwnd, true);
     crate::fusion::register_widget(hwnd);
     if spec.visible && !shared.borrow().smoke {
@@ -1028,13 +1259,29 @@ impl FenceWindow {
                 [
                     (14.0 * dpi).round() as i32,
                     (2.0 * dpi).round() as i32,
-                    ((w - 42.0) * dpi).round() as i32,
+                    ((w - 68.0) * dpi).round() as i32,
                     ((HEADER_H - 2.0) * dpi).round() as i32,
                 ],
                 (15.0 * dpi).round() as i32,
                 600,
                 0xffffff,
                 DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX,
+            ));
+
+            let add_bg_alpha = if self.hover_add { 55 } else { 18 };
+            c.round([w - 62.0, 5.0, w - 36.0, 29.0], 6.0, 0xffffff, add_bg_alpha, false, false);
+            text_draws.push((
+                "+".into(),
+                [
+                    ((w - 62.0) * dpi).round() as i32,
+                    (3.0 * dpi).round() as i32,
+                    ((w - 36.0) * dpi).round() as i32,
+                    (29.0 * dpi).round() as i32,
+                ],
+                (17.0 * dpi).round() as i32,
+                600,
+                0xffffff,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
             ));
 
             let roll_bg_alpha = if self.hover_roll { 45 } else { 0 };
@@ -1229,6 +1476,181 @@ impl FenceWindow {
         }
     }
 
+    unsafe fn reveal_item(&self, idx: usize) {
+        if let Some(entry) = self.entries.get(idx) {
+            let arg = format!("/select,\"{}\"", entry.path.to_string_lossy());
+            ShellExecuteW(
+                null_mut(),
+                wide("open").as_ptr(),
+                wide("explorer.exe").as_ptr(),
+                wide(&arg).as_ptr(),
+                null(),
+                SW_SHOWNORMAL,
+            );
+        }
+    }
+
+    unsafe fn delete_selected_items(&mut self) {
+        if self.selected.is_empty() {
+            return;
+        }
+        let mut idxs: Vec<usize> = self.selected.iter().copied().collect();
+        idxs.sort_unstable();
+        let mut paths = Vec::new();
+        for idx in idxs {
+            if let Some(e) = self.entries.get(idx) {
+                paths.push(e.path.clone());
+            }
+        }
+        let mut any_deleted = false;
+        for p in paths {
+            if delete_entry_path(&p).is_ok() {
+                any_deleted = true;
+            }
+        }
+        if any_deleted {
+            self.selected.clear();
+            self.hover_item = None;
+            self.reload_entries();
+            self.paint();
+        }
+    }
+
+    unsafe fn pick_files_to_add(&mut self) {
+        let Some(spec) = self.spec() else {
+            return;
+        };
+        let mut buffer = vec![0u16; 32768];
+        let filter = wide(
+            "Programs, Shortcuts & All Files\0*.*\0Applications & Shortcuts (*.exe;*.lnk;*.url)\0*.exe;*.lnk;*.url\0",
+        );
+        let title = wide("Select Programs, Shortcuts or Files to Add to Fence");
+        let mut dialog: OPENFILENAMEW = zeroed();
+        dialog.lStructSize = size_of::<OPENFILENAMEW>() as u32;
+        dialog.hwndOwner = self.hwnd;
+        dialog.lpstrFilter = filter.as_ptr();
+        dialog.lpstrFile = buffer.as_mut_ptr();
+        dialog.nMaxFile = buffer.len() as u32;
+        dialog.lpstrTitle = title.as_ptr();
+        dialog.Flags = OFN_NODEREFERENCELINKS
+            | OFN_EXPLORER
+            | OFN_FILEMUSTEXIST
+            | OFN_PATHMUSTEXIST
+            | OFN_NOCHANGEDIR
+            | OFN_ALLOWMULTISELECT;
+        if GetOpenFileNameW(&mut dialog) == 0 {
+            return;
+        }
+        let parts: Vec<String> = buffer
+            .split(|c| *c == 0)
+            .take_while(|s| !s.is_empty())
+            .map(String::from_utf16_lossy)
+            .collect();
+        let paths: Vec<PathBuf> = if parts.len() <= 1 {
+            parts.into_iter().map(PathBuf::from).collect()
+        } else {
+            parts[1..]
+                .iter()
+                .map(|p| PathBuf::from(&parts[0]).join(p))
+                .collect()
+        };
+        let dst_dir = Path::new(&spec.folder);
+        let mut added = false;
+        for p in paths {
+            if import_external_path_into_fence(&p, dst_dir, false).is_ok() {
+                added = true;
+            }
+        }
+        if added {
+            self.reload_entries();
+            self.paint();
+        }
+    }
+
+    unsafe fn browse_folder_dialog(hwnd: HWND, prompt: &str) -> Option<PathBuf> {
+        let initialized = CoInitializeEx(null(), COINIT_APARTMENTTHREADED as u32) >= 0;
+        let title = wide(prompt);
+        let mut display = [0u16; 260];
+        let mut browse: BROWSEINFOW = zeroed();
+        browse.hwndOwner = hwnd;
+        browse.pszDisplayName = display.as_mut_ptr();
+        browse.lpszTitle = title.as_ptr();
+        browse.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+        let selected = SHBrowseForFolderW(&browse);
+        let mut out = None;
+        if !selected.is_null() {
+            let mut path = [0u16; 260];
+            if SHGetPathFromIDListW(selected, path.as_mut_ptr()) != 0 {
+                let len = path.iter().position(|c| *c == 0).unwrap_or(path.len());
+                out = Some(PathBuf::from(String::from_utf16_lossy(&path[..len])));
+            }
+            CoTaskMemFree(selected as _);
+        }
+        if initialized {
+            CoUninitialize();
+        }
+        out
+    }
+
+    unsafe fn pick_folder_for_fence(&mut self, as_shortcut: bool) {
+        let Some(spec) = self.spec() else {
+            return;
+        };
+        let prompt = if as_shortcut {
+            "Choose a Folder to Add as a Shortcut inside This Fence"
+        } else {
+            "Choose a Folder to Move into This Fence"
+        };
+        if let Some(folder_path) = Self::browse_folder_dialog(self.hwnd, prompt) {
+            let dst_dir = Path::new(&spec.folder);
+            if import_external_path_into_fence(&folder_path, dst_dir, as_shortcut).is_ok() {
+                self.reload_entries();
+                self.paint();
+            }
+        }
+    }
+
+    unsafe fn create_new_fence_from_picked_folder(&mut self) {
+        let Some(folder_path) = Self::browse_folder_dialog(
+            self.hwnd,
+            "Choose any Folder to Create a New Desktop Fence",
+        ) else {
+            return;
+        };
+        let title = folder_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("Folder")
+            .to_string();
+        let id = format!(
+            "fence-{}",
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(1)
+        );
+        let mut wr: RECT = zeroed();
+        GetWindowRect(self.hwnd, &mut wr);
+        let new_spec = FenceSpec {
+            id,
+            title,
+            folder: folder_path.to_string_lossy().into_owned(),
+            position: [(wr.left + 36).min(1400), (wr.top + 36).min(700)],
+            size: [360, 260],
+            ..FenceSpec::default()
+        };
+        let shared = Rc::clone(&self.shared);
+        {
+            let root = shared.borrow().root.clone();
+            let mut sh = shared.borrow_mut();
+            sh.config.fences.push(new_spec.clone());
+            let _ = sh.config.save(&root);
+        }
+        if let Ok(new_win) = create_fence_window(&new_spec, Rc::clone(&shared), false) {
+            shared.borrow_mut().windows.push(new_win);
+        }
+    }
+
     unsafe fn apply_menu_command(&mut self, cmd: usize) {
         let Some(spec) = self.spec() else {
             return;
@@ -1349,6 +1771,41 @@ impl FenceWindow {
                 let p = wide(&spec.folder);
                 ShellExecuteW(null_mut(), wide("open").as_ptr(), p.as_ptr(), null(), null(), SW_SHOWNORMAL);
             }
+            CMD_ADD_FILES => {
+                self.pick_files_to_add();
+            }
+            CMD_ADD_FOLDER_LINK => {
+                self.pick_folder_for_fence(true);
+            }
+            CMD_MOVE_FOLDER_IN => {
+                self.pick_folder_for_fence(false);
+            }
+            CMD_NEW_SUBFOLDER => {
+                if let Ok(created) = create_new_subfolder(Path::new(&spec.folder)) {
+                    self.reload_entries();
+                    if let Some(pos) = self.entries.iter().position(|e| e.path == created) {
+                        self.selected.clear();
+                        self.selected.insert(pos);
+                    }
+                    self.paint();
+                }
+            }
+            CMD_NEW_FENCE_FROM_FOLDER => {
+                self.create_new_fence_from_picked_folder();
+            }
+            CMD_ITEM_OPEN => {
+                if let Some(&idx) = self.selected.iter().next() {
+                    self.open_item(idx);
+                }
+            }
+            CMD_ITEM_REVEAL => {
+                if let Some(&idx) = self.selected.iter().next() {
+                    self.reveal_item(idx);
+                }
+            }
+            CMD_ITEM_DELETE => {
+                self.delete_selected_items();
+            }
             CMD_REFRESH => {
                 self.reload_entries();
                 InvalidateRect(self.hwnd, null(), 0);
@@ -1366,10 +1823,59 @@ impl FenceWindow {
     }
 }
 
+unsafe fn run_add_menu(win: &RefCell<FenceWindow>, sx: i32, sy: i32) {
+    let hwnd = win.borrow().hwnd;
+    let menu = CreatePopupMenu();
+    if menu.is_null() {
+        return;
+    }
+    AppendMenuW(menu, MF_STRING, CMD_ADD_FILES, wide("Add Program / App / File...").as_ptr());
+    AppendMenuW(menu, MF_STRING, CMD_ADD_FOLDER_LINK, wide("Add Folder Shortcut...").as_ptr());
+    AppendMenuW(menu, MF_STRING, CMD_MOVE_FOLDER_IN, wide("Move Folder into This Fence...").as_ptr());
+    AppendMenuW(menu, MF_STRING, CMD_NEW_SUBFOLDER, wide("New Subfolder").as_ptr());
+    AppendMenuW(menu, MF_SEPARATOR, 0, null());
+    AppendMenuW(menu, MF_STRING, CMD_NEW_FENCE_FROM_FOLDER, wide("Create New Fence from Folder...").as_ptr());
+
+    SetForegroundWindow(hwnd);
+    let cmd = TrackPopupMenu(
+        menu,
+        TPM_RETURNCMD | TPM_RIGHTBUTTON,
+        sx,
+        sy,
+        0,
+        hwnd,
+        null(),
+    ) as usize;
+    DestroyMenu(menu);
+    if cmd != 0 {
+        win.borrow_mut().apply_menu_command(cmd);
+    }
+}
+
 unsafe fn run_context_menu(win: &RefCell<FenceWindow>, mut sx: i32, mut sy: i32) {
-    let (hwnd, spec) = {
-        let b = win.borrow();
-        (b.hwnd, b.spec())
+    let (hwnd, spec, sel_count, first_sel_name) = {
+        let mut b = win.borrow_mut();
+        if sx != -1 || sy != -1 {
+            let mut cpt = POINT { x: sx, y: sy };
+            ScreenToClient(b.hwnd, &mut cpt);
+            let dpi = (GetDpiForWindow(b.hwnd).max(96) as f32) / 96.0;
+            let lx = cpt.x as f32 / dpi;
+            let ly = cpt.y as f32 / dpi;
+            if let Some(hit_idx) = b.hit_item(lx, ly) {
+                if !b.selected.contains(&hit_idx) {
+                    b.selected.clear();
+                    b.selected.insert(hit_idx);
+                    b.paint();
+                }
+            }
+        }
+        let first_name = b
+            .selected
+            .iter()
+            .next()
+            .and_then(|&i| b.entries.get(i))
+            .map(|e| e.name.clone());
+        (b.hwnd, b.spec(), b.selected.len(), first_name)
     };
     let Some(spec) = spec else {
         return;
@@ -1384,12 +1890,20 @@ unsafe fn run_context_menu(win: &RefCell<FenceWindow>, mut sx: i32, mut sy: i32)
     if menu.is_null() {
         return;
     }
+    let add_menu = CreatePopupMenu();
     let op_menu = CreatePopupMenu();
     let view_menu = CreatePopupMenu();
     let icon_menu = CreatePopupMenu();
     let text_menu = CreatePopupMenu();
     let flt_menu = CreatePopupMenu();
     let flag = |b: bool| MF_STRING | if b { MF_CHECKED } else { MF_UNCHECKED };
+
+    AppendMenuW(add_menu, MF_STRING, CMD_ADD_FILES, wide("Add Program / App / File...").as_ptr());
+    AppendMenuW(add_menu, MF_STRING, CMD_ADD_FOLDER_LINK, wide("Add Folder Shortcut...").as_ptr());
+    AppendMenuW(add_menu, MF_STRING, CMD_MOVE_FOLDER_IN, wide("Move Folder into This Fence...").as_ptr());
+    AppendMenuW(add_menu, MF_STRING, CMD_NEW_SUBFOLDER, wide("New Subfolder").as_ptr());
+    AppendMenuW(add_menu, MF_SEPARATOR, 0, null());
+    AppendMenuW(add_menu, MF_STRING, CMD_NEW_FENCE_FROM_FOLDER, wide("Create New Fence from Folder...").as_ptr());
 
     let op_pct = (spec.idle_opacity * 100.0).round() as i32;
     AppendMenuW(op_menu, flag(spec.fade_on_hover && op_pct <= 8), CMD_OP_5, wide("5% (Nearly Hidden)").as_ptr());
@@ -1423,6 +1937,26 @@ unsafe fn run_context_menu(win: &RefCell<FenceWindow>, mut sx: i32, mut sy: i32)
     AppendMenuW(flt_menu, flag(spec.sort_by == "manual"), CMD_SORT_MANUAL, wide("Manual Order (Drag Icons)").as_ptr());
     AppendMenuW(flt_menu, flag(spec.folders_first), CMD_FOLDERS_FIRST, wide("Folders First").as_ptr());
 
+    if sel_count > 0 {
+        let open_label = if let Some(ref name) = first_sel_name {
+            format!("Open \"{name}\"")
+        } else {
+            "Open".to_string()
+        };
+        let del_label = if sel_count > 1 {
+            format!("Delete Selected ({sel_count} items)")
+        } else if let Some(ref name) = first_sel_name {
+            format!("Delete \"{name}\"")
+        } else {
+            "Delete".to_string()
+        };
+        AppendMenuW(menu, MF_STRING, CMD_ITEM_OPEN, wide(&open_label).as_ptr());
+        AppendMenuW(menu, MF_STRING, CMD_ITEM_REVEAL, wide("Show in Explorer").as_ptr());
+        AppendMenuW(menu, MF_STRING, CMD_ITEM_DELETE, wide(&del_label).as_ptr());
+        AppendMenuW(menu, MF_SEPARATOR, 0, null());
+    }
+
+    AppendMenuW(menu, MF_POPUP, add_menu as usize, wide("Add Folder / Program (+ )").as_ptr());
     AppendMenuW(menu, MF_POPUP, view_menu as usize, wide("View Mode & Thumbnails").as_ptr());
     AppendMenuW(menu, MF_POPUP, icon_menu as usize, wide("Icon Size").as_ptr());
     AppendMenuW(menu, MF_POPUP, text_menu as usize, wide("Tile Text Size").as_ptr());
@@ -1821,9 +2355,11 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             GetClientRect(hwnd, &mut r);
             let w = r.right as f32 / dpi;
             let roll_hit = ly < HEADER_H && lx >= w - 36.0 && lx <= w - 6.0;
+            let add_hit = ly < HEADER_H && lx >= w - 64.0 && lx < w - 36.0;
             let item_hit = b.hit_item(lx, ly);
-            if b.hover_roll != roll_hit || b.hover_item != item_hit {
+            if b.hover_roll != roll_hit || b.hover_add != add_hit || b.hover_item != item_hit {
                 b.hover_roll = roll_hit;
+                b.hover_add = add_hit;
                 b.hover_item = item_hit;
                 InvalidateRect(hwnd, null(), 0);
             }
@@ -1840,6 +2376,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             let mut b = win.borrow_mut();
             b.hover_item = None;
             b.hover_roll = false;
+            b.hover_add = false;
             b.set_hover(false);
             0
         }
@@ -1855,6 +2392,13 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             let rolled = b.spec().is_some_and(|s| s.rolled_up);
             if ly < HEADER_H && lx >= w - 36.0 && lx <= w - 6.0 {
                 b.toggle_roll();
+                return 0;
+            }
+            if ly < HEADER_H && lx >= w - 64.0 && lx < w - 36.0 {
+                drop(b);
+                let mut pt: POINT = zeroed();
+                GetCursorPos(&mut pt);
+                run_add_menu(win, pt.x, pt.y);
                 return 0;
             }
             let edge = hit_resize_edge(lx, ly, w, h, rolled);
@@ -1896,10 +2440,12 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                     cur_pt: [lx, ly],
                     active: false,
                 });
+                SetFocus(hwnd);
                 SetCapture(hwnd);
             } else {
                 b.selected.clear();
                 b.marquee = Some([lx, ly, lx, ly]);
+                SetFocus(hwnd);
                 SetCapture(hwnd);
             }
             InvalidateRect(hwnd, null(), 0);
@@ -2048,6 +2594,41 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             let delta = ((wp >> 16) as u16 as i16) as f32;
             b.scroll_y = (b.scroll_y - delta / 120.0 * 48.0).max(0.0);
             InvalidateRect(hwnd, null(), 0);
+            0
+        }
+        WM_KEYDOWN => {
+            if wp == VK_DELETE as usize {
+                win.borrow_mut().delete_selected_items();
+            }
+            0
+        }
+        WM_DROPFILES => {
+            let drop = wp as HDROP;
+            let count = DragQueryFileW(drop, u32::MAX, null_mut(), 0);
+            let mut dropped_paths = Vec::new();
+            for n in 0..count {
+                let len = DragQueryFileW(drop, n, null_mut(), 0);
+                if len > 0 {
+                    let mut buf = vec![0u16; len as usize + 1];
+                    DragQueryFileW(drop, n, buf.as_mut_ptr(), len + 1);
+                    dropped_paths.push(PathBuf::from(String::from_utf16_lossy(&buf[..len as usize])));
+                }
+            }
+            DragFinish(drop);
+            let mut b = win.borrow_mut();
+            if let Some(spec) = b.spec() {
+                let dst_dir = Path::new(&spec.folder);
+                let mut added = false;
+                for p in dropped_paths {
+                    if import_external_path_into_fence(&p, dst_dir, false).is_ok() {
+                        added = true;
+                    }
+                }
+                if added {
+                    b.reload_entries();
+                    b.paint();
+                }
+            }
             0
         }
         WM_CONTEXTMENU => {
@@ -2230,5 +2811,48 @@ mod tests {
             vec!["beta.lnk".to_string(), "gamma.lnk".to_string(), "alpha.lnk".to_string()]
         );
         assert_eq!(entries[2].name, "Alpha");
+    }
+
+    #[test]
+    fn test_external_import_shortcut_and_delete_entry() {
+        unsafe {
+            let tmp_base = std::env::temp_dir().join(format!(
+                "lumen_fence_test_{}",
+                SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(1)
+            ));
+            let src_dir = tmp_base.join("external_src");
+            let fence_dir = tmp_base.join("fence_dst");
+            std::fs::create_dir_all(&src_dir).expect("create src_dir");
+            std::fs::create_dir_all(&fence_dir).expect("create fence_dir");
+
+            // 1. Test importing an external .exe creates a .lnk shortcut inside the fence without deleting the original .exe
+            let fake_exe = src_dir.join("MyProgram.exe");
+            std::fs::write(&fake_exe, b"MZfake").expect("write fake exe");
+            let imported_lnk =
+                import_external_path_into_fence(&fake_exe, &fence_dir, false).expect("import exe");
+            assert!(imported_lnk.exists(), "must create .lnk shortcut inside fence");
+            assert!(
+                imported_lnk
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("lnk"))
+            );
+            assert!(fake_exe.exists(), "original .exe must remain intact");
+
+            // 2. Test creating a new subfolder inside the fence
+            let sub = create_new_subfolder(&fence_dir).expect("create subfolder");
+            assert!(sub.is_dir(), "subfolder must exist");
+
+            // 3. Test deleting both the shortcut and subfolder
+            delete_entry_path(&imported_lnk).expect("delete shortcut");
+            assert!(!imported_lnk.exists(), "shortcut must be deleted");
+            delete_entry_path(&sub).expect("delete subfolder");
+            assert!(!sub.exists(), "subfolder must be deleted");
+
+            let _ = std::fs::remove_dir_all(&tmp_base);
+        }
     }
 }
