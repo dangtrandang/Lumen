@@ -4,7 +4,6 @@ pub(crate) mod package;
 
 use crate::{
     compositor::{Buffer, WindowShadow},
-    d2d::{self, ParagraphAlign, TextAlign, TextStyle, WordWrap},
     glass::Glass,
     model::wide,
     motion::Tween,
@@ -23,13 +22,17 @@ use std::{
 use windows_sys::Win32::{
     Foundation::*,
     Graphics::Gdi::*,
-    System::LibraryLoader::GetModuleHandleW,
+    System::{LibraryLoader::GetModuleHandleW, Threading::GetCurrentProcessId},
     UI::{
         Controls::WM_MOUSELEAVE,
         HiDpi::*,
-        Input::KeyboardAndMouse::{
-            GetDoubleClickTime, GetKeyState, ReleaseCapture, SetCapture, TrackMouseEvent,
-            TME_LEAVE, TRACKMOUSEEVENT, VK_LBUTTON,
+        Input::{
+            GetRawInputData, RegisterRawInputDevices, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE,
+            RAWINPUTHEADER, RIDEV_INPUTSINK, RID_INPUT, RIM_TYPEMOUSE,
+            KeyboardAndMouse::{
+                GetDoubleClickTime, ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE,
+                TRACKMOUSEEVENT,
+            },
         },
         Shell::{
             SHGetFileInfoW, SHGetImageList, ShellExecuteW, SHFILEINFOW, SHGFI_ICON,
@@ -40,12 +43,16 @@ use windows_sys::Win32::{
 };
 
 const CLASS: &str = "LumenNativeFenceWindow";
+const MARQUEE_CLASS: &str = "LumenDesktopMarqueeOverlay";
 const FADE_TIMER: usize = 201;
-const DESKTOP_POLL_TIMER: usize = 202;
 const EASE: [f32; 4] = [0.25, 0.1, 0.25, 1.0];
 const HEADER_H: f32 = 34.0;
 const RADIUS: f32 = 18.0;
 const PAD_X: f32 = 12.0;
+
+const RI_MOUSE_LEFT_BUTTON_DOWN: u16 = 0x0001;
+const RI_MOUSE_LEFT_BUTTON_UP: u16 = 0x0002;
+const CLEARTYPE_NATURAL_QUALITY_VAL: u32 = 6;
 
 const CMD_FADE: usize = 1001;
 const CMD_ROLL: usize = 1002;
@@ -69,9 +76,70 @@ const CMD_FOLDERS_FIRST: usize = 1033;
 
 fn cell_dims(spec: &FenceSpec) -> (f32, f32, f32) {
     let icon = spec.icon_size.clamp(20, 64) as f32;
-    let cw = (icon + 44.0).max(66.0);
+    let cw = (icon + 46.0).max(70.0);
     let ch = icon + 42.0;
     (icon, cw, ch)
+}
+
+pub fn rect_intersects(a: [i32; 4], b: [i32; 4]) -> bool {
+    a[2] >= b[0] && a[0] <= b[2] && a[3] >= b[1] && a[1] <= b[3]
+}
+
+/// Renders true RGB sub-pixel ClearType text (`CLEARTYPE_NATURAL_QUALITY`) via Win32 GDI
+/// directly onto a 32-bit DIB `HDC` (matching Windows File Explorer sharpness on 1080p/4K).
+pub unsafe fn draw_cleartype_text(
+    dc: HDC,
+    text: &str,
+    px_rect: [i32; 4],
+    px_height: i32,
+    weight: i32,
+    rgb_color: u32,
+    dt_flags: u32,
+) {
+    if dc.is_null() || text.is_empty() || px_rect[2] <= px_rect[0] || px_rect[3] <= px_rect[1] {
+        return;
+    }
+    let font = CreateFontW(
+        -px_height.max(8),
+        0,
+        0,
+        0,
+        weight,
+        0,
+        0,
+        0,
+        DEFAULT_CHARSET as u32,
+        OUT_TT_PRECIS as u32,
+        CLIP_DEFAULT_PRECIS as u32,
+        CLEARTYPE_NATURAL_QUALITY_VAL,
+        (DEFAULT_PITCH | FF_DONTCARE) as u32,
+        wide("Segoe UI").as_ptr(),
+    );
+    if font.is_null() {
+        return;
+    }
+    let old_font = SelectObject(dc, font as _);
+    let old_mode = SetBkMode(dc, TRANSPARENT as i32);
+    let r = (rgb_color >> 16) & 0xff;
+    let g = (rgb_color >> 8) & 0xff;
+    let b = rgb_color & 0xff;
+    let colorref = (b << 16) | (g << 8) | r;
+    let old_color = SetTextColor(dc, colorref);
+
+    let mut rc = RECT {
+        left: px_rect[0],
+        top: px_rect[1],
+        right: px_rect[2],
+        bottom: px_rect[3],
+    };
+    let mut wtext = wide(text);
+    let len = wtext.len().saturating_sub(1) as i32;
+    DrawTextW(dc, wtext.as_mut_ptr(), len, &mut rc, dt_flags);
+
+    SetTextColor(dc, old_color);
+    SetBkMode(dc, old_mode);
+    SelectObject(dc, old_font);
+    DeleteObject(font as _);
 }
 
 #[derive(Clone)]
@@ -89,10 +157,10 @@ struct SharedState {
     dpi: f32,
     smoke: bool,
     quick_hidden: bool,
-    prev_lbtn_down: bool,
     last_desk_click_ms: Option<Instant>,
     last_desk_click_pt: [i32; 2],
     desk_drag_start: Option<[i32; 2]>,
+    marquee_hwnd: HWND,
     windows: Vec<Rc<RefCell<FenceWindow>>>,
 }
 
@@ -120,14 +188,14 @@ struct FenceWindow {
     scroll_y: f32,
     alpha_tween: Tween,
     started: Instant,
-    dragging: Option<[i32; 4]>, // [cursor_x, cursor_y, win_x, win_y]
+    dragging: Option<[i32; 4]>,
     resizing: Option<ResizeDrag>,
     visible: bool,
 }
 
 #[derive(Clone, Copy)]
 struct ResizeDrag {
-    edge: u8, // bitmask: 1=left, 2=right, 4=top, 8=bottom
+    edge: u8,
     start_x: i32,
     start_y: i32,
     orig_l: i32,
@@ -177,6 +245,11 @@ impl Host {
         register_class()?;
         let dpi = GetDpiForSystem() as f32 / 96.0;
         let config = FencesConfig::load(root);
+        let marquee_hwnd = if smoke {
+            null_mut()
+        } else {
+            create_marquee_overlay()
+        };
         let shared = Rc::new(RefCell::new(SharedState {
             root: root.into(),
             config: config.clone(),
@@ -184,10 +257,10 @@ impl Host {
             dpi,
             smoke,
             quick_hidden: false,
-            prev_lbtn_down: false,
             last_desk_click_ms: None,
             last_desk_click_pt: [0, 0],
             desk_drag_start: None,
+            marquee_hwnd,
             windows: Vec::new(),
         }));
         let mut windows = Vec::new();
@@ -201,7 +274,7 @@ impl Host {
         }
         if let Some(first) = windows.first() {
             if !smoke {
-                SetTimer(first.borrow().hwnd, DESKTOP_POLL_TIMER, 20, None);
+                register_raw_mouse_sink(first.borrow().hwnd);
             }
         }
         shared.borrow_mut().windows = windows;
@@ -226,6 +299,10 @@ impl Host {
         self.shared.borrow_mut().config.open = false;
         let root = self.shared.borrow().root.clone();
         let _ = self.shared.borrow().config.save(&root);
+        let mhwnd = self.shared.borrow().marquee_hwnd;
+        if !mhwnd.is_null() {
+            ShowWindow(mhwnd, SW_HIDE);
+        }
         let wins = self.shared.borrow().windows.clone();
         for w in wins {
             let mut b = w.borrow_mut();
@@ -262,6 +339,52 @@ impl Host {
             InvalidateRect(hwnd, null(), 0);
         }
     }
+}
+
+unsafe fn register_raw_mouse_sink(hwnd: HWND) {
+    let rid = RAWINPUTDEVICE {
+        usUsagePage: 0x01,
+        usUsage: 0x02,
+        dwFlags: RIDEV_INPUTSINK,
+        hwndTarget: hwnd,
+    };
+    let _ = RegisterRawInputDevices(&rid, 1, size_of::<RAWINPUTDEVICE>() as u32);
+}
+
+unsafe fn create_marquee_overlay() -> HWND {
+    let class = wide(MARQUEE_CLASS);
+    let instance = GetModuleHandleW(null());
+    let wc = WNDCLASSW {
+        lpfnWndProc: Some(marquee_proc),
+        hInstance: instance,
+        hCursor: LoadCursorW(null_mut(), IDC_ARROW),
+        hbrBackground: CreateSolidBrush(0x00ff8c4f),
+        lpszClassName: class.as_ptr(),
+        ..zeroed()
+    };
+    let _ = RegisterClassW(&wc);
+    let hwnd = CreateWindowExW(
+        WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+        class.as_ptr(),
+        wide("").as_ptr(),
+        WS_POPUP | WS_BORDER,
+        0,
+        0,
+        0,
+        0,
+        null_mut(),
+        null_mut(),
+        instance,
+        null(),
+    );
+    if !hwnd.is_null() {
+        SetLayeredWindowAttributes(hwnd, 0, 95, LWA_ALPHA);
+    }
+    hwnd
+}
+
+unsafe extern "system" fn marquee_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    DefWindowProcW(hwnd, msg, wp, lp)
 }
 
 unsafe fn register_class() -> Result<(), String> {
@@ -461,14 +584,12 @@ impl FenceWindow {
             ) != 0
             {
                 let mut ilist: *mut std::ffi::c_void = null_mut();
-                // IID_IImageList = {46EB5926-582E-4017-9FDF-E8998DAA0950}
                 let iid = windows_sys::core::GUID::from_u128(0x46eb5926_582e_4017_9fdf_e8998daa0950);
                 if SHGetImageList(SHIL_EXTRALARGE as i32, &iid, &mut ilist) == 0 && !ilist.is_null() {
-                    // IImageList::GetIcon is vtable index 10
                     type GetIconFn = unsafe extern "system" fn(*mut std::ffi::c_void, i32, u32, *mut HICON) -> i32;
                     let vtbl = *(ilist as *const *const usize);
                     let get_icon: GetIconFn = std::mem::transmute(*vtbl.add(10));
-                    let _ = get_icon(ilist, info.iIcon, 0x0001 /* ILD_TRANSPARENT */, &mut hicon);
+                    let _ = get_icon(ilist, info.iIcon, 0x0001, &mut hicon);
                     type ReleaseFn = unsafe extern "system" fn(*mut std::ffi::c_void) -> u32;
                     let release: ReleaseFn = std::mem::transmute(*vtbl.add(2));
                     let _ = release(ilist);
@@ -542,14 +663,14 @@ impl FenceWindow {
             h,
             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
         );
-        InvalidateRect(self.hwnd, null(), 0);
+        self.paint();
     }
 
     unsafe fn paint(&mut self) {
         let Some(spec) = self.spec() else {
             return;
         };
-        let dpi = self.shared.borrow().dpi;
+        let dpi = (GetDpiForWindow(self.hwnd).max(96) as f32) / 96.0;
         let mut r: RECT = zeroed();
         GetClientRect(self.hwnd, &mut r);
         if r.right <= 0 || r.bottom <= 0 {
@@ -566,7 +687,7 @@ impl FenceWindow {
         let alpha_u8 = (alpha_f * 255.0).round() as u8;
 
         let mut frame = match self.frame.take() {
-            Some(f) if f.width == r.right && f.height == r.bottom && f.dpi == dpi => f,
+            Some(f) if f.width == r.right && f.height == r.bottom && (f.dpi - dpi).abs() < 0.01 => f,
             _ => match Buffer::new(r.right, r.bottom, dpi, RADIUS) {
                 Some(f) => f,
                 None => return,
@@ -583,7 +704,7 @@ impl FenceWindow {
                 wr.top,
                 r.right,
                 r.bottom,
-                dpi,
+                (dpi * 100.0).round() as i32,
                 crate::glass::frosted_glass(),
                 g.revision()
             )
@@ -615,33 +736,34 @@ impl FenceWindow {
             frame.copy_from(bg.dc);
         }
 
-        let mut text_draws: Vec<(String, [f32; 4], f32, u16, TextAlign, ParagraphAlign, WordWrap, u32)> = Vec::new();
+        let mut text_draws: Vec<(String, [i32; 4], i32, i32, u32, u32)> = Vec::new();
         let batch = render::AlphaBatch::new(frame.dc, dpi);
         {
             let c = Canvas::new(frame.dc, dpi);
-            // Dark smoked-glass tint so icons & text stay crisp over bright wallpapers
-            c.round([0.0, 0.0, w, h], RADIUS, 0x0b0f1c, 145, false, false);
-            // Subtle outer rim (or bright blue when group-selected from desktop)
+            c.round([0.0, 0.0, w, h], RADIUS, 0x0b0f1c, 150, false, false);
             if self.group_selected {
-                c.round([1.0, 1.0, w - 1.0, h - 1.0], RADIUS, 0x7c9cff, 220, true, false);
+                c.round([1.0, 1.0, w - 1.0, h - 1.0], RADIUS, 0x7c9cff, 235, true, false);
+                c.round([2.0, 2.0, w - 2.0, h - 2.0], RADIUS, 0x7c9cff, 160, true, false);
             } else {
                 c.round([0.5, 0.5, w - 0.5, h - 0.5], RADIUS, 0xffffff, 38, true, false);
             }
-            // Header tint
-            c.round([1.0, 1.0, w - 1.0, HEADER_H], RADIUS, 0x05070e, 90, false, false);
-            // Title
+            c.round([1.0, 1.0, w - 1.0, HEADER_H], RADIUS, 0x05070e, 95, false, false);
+
             let title_str = format!("{}  ({})", spec.title, self.entries.len());
             text_draws.push((
                 title_str,
-                [14.0, 2.0, w - 42.0, HEADER_H - 2.0],
-                12.5,
+                [
+                    (14.0 * dpi).round() as i32,
+                    (2.0 * dpi).round() as i32,
+                    ((w - 42.0) * dpi).round() as i32,
+                    ((HEADER_H - 2.0) * dpi).round() as i32,
+                ],
+                (15.0 * dpi).round() as i32,
                 600,
-                TextAlign::Leading,
-                ParagraphAlign::Center,
-                WordWrap::NoWrap,
                 0xffffff,
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX,
             ));
-            // Roll-up chevron button
+
             let roll_bg_alpha = if self.hover_roll { 45 } else { 0 };
             if roll_bg_alpha > 0 {
                 c.round([w - 34.0, 5.0, w - 8.0, 29.0], 6.0, 0xffffff, roll_bg_alpha, false, false);
@@ -649,13 +771,16 @@ impl FenceWindow {
             let glyph = if spec.rolled_up { "▸" } else { "▾" };
             text_draws.push((
                 glyph.into(),
-                [w - 34.0, 6.0, w - 8.0, 28.0],
-                13.0,
+                [
+                    ((w - 34.0) * dpi).round() as i32,
+                    (4.0 * dpi).round() as i32,
+                    ((w - 8.0) * dpi).round() as i32,
+                    (30.0 * dpi).round() as i32,
+                ],
+                (15.0 * dpi).round() as i32,
                 600,
-                TextAlign::Center,
-                ParagraphAlign::Center,
-                WordWrap::NoWrap,
                 0xe8e8e8,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
             ));
 
             if !spec.rolled_up {
@@ -690,13 +815,16 @@ impl FenceWindow {
                     }
                     text_draws.push((
                         name,
-                        [x + 3.0, y + 9.0 + icon_sz, x + cell_w - 3.0, y + cell_h - 1.0],
-                        11.8,
-                        500,
-                        TextAlign::Center,
-                        ParagraphAlign::Near,
-                        WordWrap::Wrap,
+                        [
+                            ((x + 2.0) * dpi).round() as i32,
+                            ((y + 8.0 + icon_sz) * dpi).round() as i32,
+                            ((x + cell_w - 2.0) * dpi).round() as i32,
+                            ((y + cell_h - 1.0) * dpi).round() as i32,
+                        ],
+                        (14.0 * dpi).round() as i32,
+                        400,
                         0xffffff,
+                        DT_CENTER | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX,
                     ));
                 }
                 if let Some([sx, sy, cx, cy]) = self.marquee {
@@ -709,30 +837,13 @@ impl FenceWindow {
                         c.round([ml, mt, mr, mb], 4.0, 0x7c9cff, 180, true, false);
                     }
                 }
-                // Subtle bottom-right resize grip indicator
                 c.round([w - 11.0, h - 11.0, w - 5.0, h - 5.0], 2.0, 0xffffff, 55, false, false);
             }
         }
         drop(batch);
 
-        for (txt, rect, sz, weight, align, valign, wrap, color) in &text_draws {
-            let style = TextStyle {
-                font_family: "Segoe UI",
-                size: *sz * dpi,
-                weight: *weight,
-                italic: false,
-                align: *align,
-                valign: *valign,
-                wrap: *wrap,
-                trim_ellipsis: true,
-            };
-            let px_rect = [
-                (rect[0] * dpi).round(),
-                (rect[1] * dpi).round(),
-                (rect[2] * dpi).round(),
-                (rect[3] * dpi).round(),
-            ];
-            d2d::draw_text_dc(frame.dc, r.right, r.bottom, txt, px_rect, &style, *color, 255);
+        for (txt, px_rect, px_h, weight, color, flags) in &text_draws {
+            draw_cleartype_text(frame.dc, txt, *px_rect, *px_h, *weight, *color, *flags);
         }
 
         frame.present_with_alpha_opacity(self.hwnd, false, alpha_u8);
@@ -755,7 +866,7 @@ impl FenceWindow {
         if spec.rolled_up || ly < HEADER_H {
             return None;
         }
-        let dpi = self.shared.borrow().dpi;
+        let dpi = (GetDpiForWindow(self.hwnd).max(96) as f32) / 96.0;
         let mut r: RECT = zeroed();
         GetClientRect(self.hwnd, &mut r);
         let w = r.right as f32 / dpi;
@@ -959,74 +1070,150 @@ unsafe fn run_context_menu(win: &RefCell<FenceWindow>, mut sx: i32, mut sy: i32)
     }
 }
 
-unsafe fn poll_desktop_double_click(shared: &Rc<RefCell<SharedState>>) {
-    let down = (GetKeyState(VK_LBUTTON as i32) as u16 & 0x8000) != 0;
-    let mut pt: POINT = zeroed();
-    GetCursorPos(&mut pt);
-    let mut toggle = false;
-    let mut select_rect: Option<[i32; 4]> = None;
-    let mut clear_group = false;
-    {
-        let mut sh = shared.borrow_mut();
-        let was_down = sh.prev_lbtn_down;
-        sh.prev_lbtn_down = down;
-        let is_desktop_pt = || -> bool {
-            let target = WindowFromPoint(pt);
-            let mut cls = [0u16; 64];
-            let len = if !target.is_null() {
-                GetClassNameW(target, cls.as_mut_ptr(), 64).max(0) as usize
-            } else {
-                0
-            };
-            let name = String::from_utf16_lossy(&cls[..len]);
-            matches!(
-                name.as_str(),
-                "Progman" | "WorkerW" | "SHELLDLL_DefView" | "SysListView32"
-            )
-        };
-        if down && !was_down {
-            if is_desktop_pt() {
-                sh.desk_drag_start = Some([pt.x, pt.y]);
-                clear_group = true;
-                let now = Instant::now();
-                let dbl_ms = GetDoubleClickTime() as u128;
-                let is_dbl = sh.last_desk_click_ms.is_some_and(|prev| {
-                    now.duration_since(prev).as_millis() <= dbl_ms
-                        && (pt.x - sh.last_desk_click_pt[0]).abs() <= 6
-                        && (pt.y - sh.last_desk_click_pt[1]).abs() <= 6
-                });
-                if is_dbl {
-                    sh.last_desk_click_ms = None;
-                    sh.desk_drag_start = None;
-                    sh.quick_hidden = !sh.quick_hidden;
-                    toggle = true;
-                } else {
-                    sh.last_desk_click_ms = Some(now);
-                    sh.last_desk_click_pt = [pt.x, pt.y];
-                }
-            } else {
-                sh.last_desk_click_ms = None;
-                sh.desk_drag_start = None;
+unsafe fn window_class_name(hwnd: HWND) -> String {
+    if hwnd.is_null() {
+        return String::new();
+    }
+    let mut cls = [0u16; 64];
+    let len = GetClassNameW(hwnd, cls.as_mut_ptr(), 64).max(0) as usize;
+    String::from_utf16_lossy(&cls[..len])
+}
+
+unsafe fn is_desktop_point(pt: POINT) -> bool {
+    let target = WindowFromPoint(pt);
+    if target.is_null() {
+        return false;
+    }
+    let mut pid = 0u32;
+    GetWindowThreadProcessId(target, &mut pid);
+    if pid == GetCurrentProcessId() {
+        return false;
+    }
+    let cls = window_class_name(target);
+    let root = GetAncestor(target, GA_ROOT);
+    let root_cls = window_class_name(root);
+    let is_std_desk = |s: &str| {
+        matches!(
+            s,
+            "Progman" | "WorkerW" | "SHELLDLL_DefView" | "SysListView32"
+        )
+    };
+    if is_std_desk(&cls) || is_std_desk(&root_cls) {
+        return true;
+    }
+    let check_hwnd = if !root.is_null() { root } else { target };
+    let mut wr: RECT = zeroed();
+    GetWindowRect(check_hwnd, &mut wr);
+    let sw = GetSystemMetrics(SM_CXSCREEN);
+    let sh = GetSystemMetrics(SM_CYSCREEN);
+    if (wr.right - wr.left) >= sw && (wr.bottom - wr.top) >= sh {
+        // Fullscreen background/live-wallpaper host sitting below desktop-layer widgets
+        let mut cur = check_hwnd;
+        for _ in 0..512 {
+            cur = GetWindow(cur, GW_HWNDPREV);
+            if cur.is_null() {
+                break;
             }
-        } else if !down && was_down {
-            if let Some([sx, sy]) = sh.desk_drag_start.take() {
-                if (pt.x - sx).abs() > 14 || (pt.y - sy).abs() > 14 {
-                    select_rect = Some([sx.min(pt.x), sy.min(pt.y), sx.max(pt.x), sy.max(pt.y)]);
-                }
+            if crate::desktop_layer::contains(cur) {
+                return true;
             }
         }
     }
+    false
+}
+
+unsafe fn handle_raw_mouse(lparam: LPARAM, shared: &Rc<RefCell<SharedState>>) {
+    let mut raw: RAWINPUT = zeroed();
+    let mut sz = size_of::<RAWINPUT>() as u32;
+    if GetRawInputData(
+        lparam as HRAWINPUT,
+        RID_INPUT,
+        &mut raw as *mut _ as _,
+        &mut sz,
+        size_of::<RAWINPUTHEADER>() as u32,
+    ) == u32::MAX
+    {
+        return;
+    }
+    if raw.header.dwType != RIM_TYPEMOUSE {
+        return;
+    }
+    let flags = raw.data.mouse.Anonymous.Anonymous.usButtonFlags;
+    let l_down = (flags & RI_MOUSE_LEFT_BUTTON_DOWN) != 0;
+    let l_up = (flags & RI_MOUSE_LEFT_BUTTON_UP) != 0;
+
+    let mut pt: POINT = zeroed();
+    GetCursorPos(&mut pt);
+
+    let mut toggle_hide = false;
+    let mut clear_group = false;
+    let mut drag_box: Option<[i32; 4]> = None;
+    let mut end_drag = false;
+    let mhwnd = shared.borrow().marquee_hwnd;
+
+    if l_down {
+        if is_desktop_point(pt) {
+            let mut sh = shared.borrow_mut();
+            sh.desk_drag_start = Some([pt.x, pt.y]);
+            clear_group = true;
+            let now = Instant::now();
+            let dbl_ms = GetDoubleClickTime() as u128;
+            let is_dbl = sh.last_desk_click_ms.is_some_and(|prev| {
+                now.duration_since(prev).as_millis() <= dbl_ms
+                    && (pt.x - sh.last_desk_click_pt[0]).abs() <= 8
+                    && (pt.y - sh.last_desk_click_pt[1]).abs() <= 8
+            });
+            if is_dbl {
+                sh.last_desk_click_ms = None;
+                sh.desk_drag_start = None;
+                sh.quick_hidden = !sh.quick_hidden;
+                toggle_hide = true;
+            } else {
+                sh.last_desk_click_ms = Some(now);
+                sh.last_desk_click_pt = [pt.x, pt.y];
+            }
+        } else {
+            let mut sh = shared.borrow_mut();
+            sh.last_desk_click_ms = None;
+            sh.desk_drag_start = None;
+        }
+    } else if l_up {
+        let mut sh = shared.borrow_mut();
+        if sh.desk_drag_start.take().is_some() {
+            end_drag = true;
+        }
+    } else {
+        let sh = shared.borrow();
+        if let Some([sx, sy]) = sh.desk_drag_start {
+            if (pt.x - sx).abs() > 8 || (pt.y - sy).abs() > 8 {
+                drag_box = Some([sx.min(pt.x), sy.min(pt.y), sx.max(pt.x), sy.max(pt.y)]);
+            }
+        }
+    }
+
     if clear_group {
         let wins = shared.borrow().windows.clone();
         for w in wins {
             let mut b = w.borrow_mut();
             if b.group_selected {
                 b.group_selected = false;
-                InvalidateRect(b.hwnd, null(), 0);
+                b.paint();
             }
         }
     }
-    if let Some([ml, mt, mr, mb]) = select_rect {
+
+    if let Some([ml, mt, mr, mb]) = drag_box {
+        if !mhwnd.is_null() {
+            SetWindowPos(
+                mhwnd,
+                HWND_TOPMOST,
+                ml,
+                mt,
+                (mr - ml).max(2),
+                (mb - mt).max(2),
+                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            );
+        }
         let wins = shared.borrow().windows.clone();
         for w in wins {
             let mut b = w.borrow_mut();
@@ -1035,37 +1222,26 @@ unsafe fn poll_desktop_double_click(shared: &Rc<RefCell<SharedState>>) {
             }
             let mut wr: RECT = zeroed();
             GetWindowRect(b.hwnd, &mut wr);
-            if wr.right >= ml && wr.left <= mr && wr.bottom >= mt && wr.top <= mb {
-                b.group_selected = true;
-                InvalidateRect(b.hwnd, null(), 0);
+            let hit = rect_intersects([wr.left, wr.top, wr.right, wr.bottom], [ml, mt, mr, mb]);
+            if b.group_selected != hit {
+                b.group_selected = hit;
+                b.paint();
             }
         }
     }
-    if toggle {
+
+    if end_drag && !mhwnd.is_null() {
+        ShowWindow(mhwnd, SW_HIDE);
+    }
+
+    if toggle_hide {
+        if !mhwnd.is_null() {
+            ShowWindow(mhwnd, SW_HIDE);
+        }
         let dock_hwnd = crate::window::host_hwnd();
         if !dock_hwnd.is_null() {
             PostMessageW(dock_hwnd, crate::window::TOGGLE_QUICK_HIDE, 0, 0);
             return;
-        }
-        let (hidden, wins) = {
-            let sh = shared.borrow();
-            (sh.quick_hidden, sh.windows.clone())
-        };
-        for w in wins {
-            let mut b = w.borrow_mut();
-            if !b.visible {
-                continue;
-            }
-            if hidden {
-                ShowWindow(b.hwnd, SW_HIDE);
-                if let Some(s) = &b.shadow {
-                    s.hide();
-                }
-            } else {
-                ShowWindow(b.hwnd, SW_SHOWNOACTIVATE);
-                crate::desktop_layer::pin(b.hwnd);
-                b.paint();
-            }
         }
     }
 }
@@ -1089,9 +1265,9 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             EndPaint(hwnd, &ps);
             0
         }
-        WM_TIMER if wp == DESKTOP_POLL_TIMER => {
+        WM_INPUT => {
             let shared = win.borrow().shared.clone();
-            poll_desktop_double_click(&shared);
+            handle_raw_mouse(lp, &shared);
             0
         }
         WM_TIMER if wp == FADE_TIMER => {
@@ -1107,7 +1283,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         }
         WM_SETCURSOR => {
             let b = win.borrow();
-            let dpi = b.shared.borrow().dpi;
+            let dpi = (GetDpiForWindow(hwnd).max(96) as f32) / 96.0;
             let rolled = b.spec().is_some_and(|s| s.rolled_up);
             drop(b);
             let mut pt: POINT = zeroed();
@@ -1117,8 +1293,8 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             GetClientRect(hwnd, &mut r);
             let edge = hit_resize_edge(pt.x as f32 / dpi, pt.y as f32 / dpi, r.right as f32 / dpi, r.bottom as f32 / dpi, rolled);
             let cursor_id = match edge {
-                5 | 10 => IDC_SIZENWSE, // L+T or R+B
-                6 | 9 => IDC_SIZENESW,  // R+T or L+B
+                5 | 10 => IDC_SIZENWSE,
+                6 | 9 => IDC_SIZENESW,
                 1 | 2 => IDC_SIZEWE,
                 4 | 8 => IDC_SIZENS,
                 _ => IDC_ARROW,
@@ -1137,7 +1313,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 let nx = wx + dx;
                 let ny = wy + dy;
                 SetWindowPos(hwnd, null_mut(), nx, ny, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-                let dpi = b.shared.borrow().dpi;
+                let dpi = (GetDpiForWindow(hwnd).max(96) as f32) / 96.0;
                 if let Some(sh) = &mut b.shadow {
                     sh.sync(hwnd, dpi, 255);
                 }
@@ -1152,7 +1328,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 return 0;
             }
             if let Some(rd) = b.resizing {
-                let dpi = b.shared.borrow().dpi;
+                let dpi = (GetDpiForWindow(hwnd).max(96) as f32) / 96.0;
                 let min_w = (220.0 * dpi).round() as i32;
                 let min_h = (120.0 * dpi).round() as i32;
                 let dx = pt.x - rd.start_x;
@@ -1178,7 +1354,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 b.paint();
                 return 0;
             }
-            let dpi = b.shared.borrow().dpi;
+            let dpi = (GetDpiForWindow(hwnd).max(96) as f32) / 96.0;
             let lx = (lp as i16) as f32 / dpi;
             let ly = ((lp >> 16) as i16) as f32 / dpi;
             if let Some([sx, sy, _, _]) = b.marquee {
@@ -1236,36 +1412,9 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         }
         WM_LBUTTONDOWN => {
             let mut b = win.borrow_mut();
-            let dpi = b.shared.borrow().dpi;
+            let dpi = (GetDpiForWindow(hwnd).max(96) as f32) / 96.0;
             let lx = (lp as i16) as f32 / dpi;
             let ly = ((lp >> 16) as i16) as f32 / dpi;
-            if let Some([sx, sy, _, _]) = b.marquee {
-                b.marquee = Some([sx, sy, lx, ly]);
-                let ml = sx.min(lx);
-                let mt = sy.min(ly);
-                let mr = sx.max(lx);
-                let mb = sy.max(ly);
-                b.selected.clear();
-                if let Some(spec) = b.spec() {
-                    let mut r: RECT = zeroed();
-                    GetClientRect(hwnd, &mut r);
-                    let w = r.right as f32 / dpi;
-                    let (_, cell_w, cell_h) = cell_dims(&spec);
-                    let cols = ((w - PAD_X * 2.0) / cell_w).floor().max(1.0) as usize;
-                    let start_x = (PAD_X + ((w - PAD_X * 2.0) - cols as f32 * cell_w) * 0.5).round();
-                    for idx in 0..b.entries.len() {
-                        let row = idx / cols;
-                        let col = idx % cols;
-                        let x = start_x + col as f32 * cell_w;
-                        let y = HEADER_H + 6.0 + row as f32 * cell_h - b.scroll_y;
-                        if x + cell_w >= ml && x <= mr && y + cell_h >= mt && y <= mb {
-                            b.selected.insert(idx);
-                        }
-                    }
-                }
-                b.paint();
-                return 0;
-            }
             let mut r: RECT = zeroed();
             GetClientRect(hwnd, &mut r);
             let w = r.right as f32 / dpi;
@@ -1294,7 +1443,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 return 0;
             }
             let hit = b.hit_item(lx, ly);
-            if ly < HEADER_H {
+            if ly < HEADER_H || b.group_selected {
                 let mut pt: POINT = zeroed();
                 let mut wr: RECT = zeroed();
                 GetCursorPos(&mut pt);
@@ -1338,7 +1487,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 if was_drag || was_resize {
                     let mut wr: RECT = zeroed();
                     GetWindowRect(hwnd, &mut wr);
-                    let dpi = b.shared.borrow().dpi;
+                    let dpi = (GetDpiForWindow(hwnd).max(96) as f32) / 96.0;
                     b.update_spec(|s| {
                         s.position = [wr.left, wr.top];
                         if was_resize && !s.rolled_up {
@@ -1364,7 +1513,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         }
         WM_LBUTTONDBLCLK => {
             let mut b = win.borrow_mut();
-            let dpi = b.shared.borrow().dpi;
+            let dpi = (GetDpiForWindow(hwnd).max(96) as f32) / 96.0;
             let lx = (lp as i16) as f32 / dpi;
             let ly = ((lp >> 16) as i16) as f32 / dpi;
             if ly < HEADER_H {
@@ -1395,5 +1544,70 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             0
         }
         _ => DefWindowProcW(hwnd, msg, wp, lp),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cleartype_text_renders_crisp_subpixels() {
+        unsafe {
+            let buf = Buffer::plain(200, 48, 1.0).expect("buffer");
+            let c = Canvas::new(buf.dc, 1.0);
+            c.round([0.0, 0.0, 200.0, 48.0], 8.0, 0x0b0f1c, 255, false, false);
+            draw_cleartype_text(
+                buf.dc,
+                "Tarot & HNHH (13)",
+                [10, 4, 190, 40],
+                15,
+                600,
+                0xffffff,
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+            );
+            let pixels = buf.snapshot();
+            let bright_count = pixels
+                .chunks_exact(4)
+                .filter(|px| px[0] > 200 && px[1] > 200 && px[2] > 200)
+                .count();
+            let subpixel_cleartype_count = pixels
+                .chunks_exact(4)
+                .filter(|px| {
+                    let (b, g, r) = (px[0] as i32, px[1] as i32, px[2] as i32);
+                    (r - b).abs() > 12 || (r - g).abs() > 12 || (g - b).abs() > 12
+                })
+                .count();
+            assert!(bright_count > 40, "must render bright white glyph stems (got {bright_count})");
+            assert!(
+                subpixel_cleartype_count > 20,
+                "must render true RGB sub-pixel ClearType edges (got {subpixel_cleartype_count})"
+            );
+        }
+    }
+
+    #[test]
+    fn test_desktop_marquee_multi_fence_intersect_and_group_move() {
+        let fence_rects = [
+            ("web", [20, 740, 360, 990]),
+            ("games", [376, 740, 716, 990]),
+            ("ai", [732, 740, 1152, 990]),
+            ("downloads", [1540, 20, 1900, 360]),
+        ];
+        let marquee = [10, 700, 800, 1000];
+        let selected: Vec<&str> = fence_rects
+            .iter()
+            .filter(|(_, r)| rect_intersects(*r, marquee))
+            .map(|(id, _)| *id)
+            .collect();
+        assert_eq!(selected, vec!["web", "games", "ai"]);
+
+        let (dx, dy) = (120, -80);
+        let moved: Vec<[i32; 2]> = fence_rects
+            .iter()
+            .filter(|(id, _)| selected.contains(id))
+            .map(|(_, r)| [r[0] + dx, r[1] + dy])
+            .collect();
+        assert_eq!(moved, vec![[140, 660], [496, 660], [852, 660]]);
     }
 }

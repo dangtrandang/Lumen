@@ -190,7 +190,7 @@ unsafe fn font_at(size: f32, weight: u16) -> Ptr {
                     } else if base_weight == 600 {
                         "Segoe UI Semibold"
                     } else {
-                        "Segoe UI Variable Text"
+                        "Segoe UI"
                     })
                     .as_ptr(),
                     null_mut(),
@@ -2461,7 +2461,7 @@ impl Canvas {
                     4
                 },
             );
-            let font = font_at(size * self.scale, weight);
+            let font = font_at((size * self.scale).round(), weight);
             let mut format = null_mut();
             GdipCreateStringFormat(0x1000, 0, &mut format);
             GdipSetStringFormatAlign(format, align);
@@ -2470,10 +2470,10 @@ impl Canvas {
             let mut brush = null_mut();
             GdipCreateSolidFill(argb(color, opacity), &mut brush);
             let r = Rect {
-                x: r[0] * self.scale,
-                y: r[1] * self.scale,
-                w: (r[2] - r[0]) * self.scale,
-                h: (r[3] - r[1]) * self.scale,
+                x: (r[0] * self.scale).round(),
+                y: (r[1] * self.scale).round(),
+                w: ((r[2] - r[0]) * self.scale).round(),
+                h: ((r[3] - r[1]) * self.scale).round(),
             };
             let text = wide(text);
             GdipDrawString(
