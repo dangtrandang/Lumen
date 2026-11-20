@@ -15,3 +15,5 @@ share/
 __pycache__/
 .codex-attachments/
 *.lnk
+
+Lumen.exe

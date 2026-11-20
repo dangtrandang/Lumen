@@ -1375,6 +1375,14 @@ impl Buffer {
         }
     }
     pub unsafe fn present_with_alpha(&mut self, hwnd: HWND, preserve_alpha: bool) -> bool {
+        self.present_with_alpha_opacity(hwnd, preserve_alpha, 255)
+    }
+    pub unsafe fn present_with_alpha_opacity(
+        &mut self,
+        hwnd: HWND,
+        preserve_alpha: bool,
+        opacity: u8,
+    ) -> bool {
         crate::fusion::prepare(hwnd, self.radius);
         let group = crate::fusion::group(hwnd);
         if let Some(panes) = group {
@@ -1453,7 +1461,11 @@ impl Buffer {
             // second tight shadow here made the bottom edge look hard.
             p[3] = window_pixel_alpha(p[3], a as u8, preserve_alpha);
         }
-        self.upload(hwnd)
+        if opacity == 255 {
+            self.upload(hwnd)
+        } else {
+            self.upload_alpha(hwnd, opacity)
+        }
     }
     pub unsafe fn replace_pixels(&self, pixels: &[u8]) {
         assert_eq!(

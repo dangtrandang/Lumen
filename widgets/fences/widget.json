@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "fences",
+  "name": "Desktop Fences",
+  "description": "Liquid glass desktop folder fences with fade on hover.",
+  "icon": "launcher",
+  "accent": "#7c9cff",
+  "order": 5,
+  "runtime": "native",
+  "hasSettings": false,
+  "surface": "desktop",
+  "nativeEntry": "native/mod.rs"
+}

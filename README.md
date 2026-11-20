@@ -1,9 +1,17 @@
-# Lumen
+# Lumen (Desktop Fences Fork)
 
-Native Rust desktop widgets for Windows: App Dock, Clock, Calendar, YouTube
-Music, Notes and Control Center. Widget UI shares one Rust/Win32 process and
-wallpaper compositor. The Electron app and its build/runtime dependencies have
-been removed.
+Fork of [nhatnguyends/Lumen](https://github.com/nhatnguyends/Lumen) — Native Rust desktop widgets for Windows: **Desktop Fences**, App Dock, Clock, Calendar, YouTube Music, Notes and Control Center. Widget UI shares one Rust/Win32 process and wallpaper compositor.
+
+## Desktop Fences (`widgets/fences`)
+
+Stardock-style liquid/frosted glass desktop folder fences built natively in Rust:
+
+- **Multi-Fence Folder Containers:** Independent glass windows backed by real folders (configured in `config/fences.json`), with hardware-accelerated dragging from the title bar and resizing from all 4 edges & corners.
+- **120Hz Fade on Hover:** Fences can subtly dim when idle (`5%`, `15%`, `25%`, `50%`, or `100%`) and smoothly animate to `100%` at 120Hz when hovered.
+- **Desktop Double-Click Quick-Hide:** Double-click an empty area of the Windows desktop to hide or reveal all fences.
+- **HD Icons & DirectWrite Typography:** Extracts 48×48 shell icons (`SHIL_EXTRALARGE`) and renders crisp DirectWrite text with a subtle drop shadow over dark smoked glass.
+- **Marquee Multi-Select & Roll-Up:** Drag inside a fence to marquee-select multiple items, double-click a fence header to roll up/expand, or right-click any fence for **Fade on Hover**, **Idle Opacity**, **Icon Size (`24/32/48px`)**, **Filter & Sort** (`Show All`, `Folders Only`, `Files & Apps Only`, `Sort by Name`, `Sort by Date`, `Folders First`), **Open Folder**, and **Refresh**.
+- **Auto-Update Disabled:** Upstream GitHub release auto-updates are disabled (`update::check` returns `Ok(None)`) so local fork builds are never overwritten.
 
 ## Portable download
 

@@ -206,15 +206,9 @@ fn get(url: &str, limit: usize) -> Result<(u32, Vec<u8>)> {
     }
     Err("Too many download redirects".into())
 }
-pub fn check(root: &Path) -> Result<Option<Release>> {
-    let (status, body) = get(API, 2 * 1024 * 1024)?;
-    if status == 404 {
-        return Ok(None);
-    }
-    if status != 200 {
-        return Err(format!("GitHub returned HTTP {status}; try again later"));
-    }
-    parse_release(&body, &installed_version(root))
+pub fn check(_root: &Path) -> Result<Option<Release>> {
+    // Auto-update disabled on custom Desktop Fences fork.
+    Ok(None)
 }
 fn parse_release(bytes: &[u8], current: &str) -> Result<Option<Release>> {
     let v: serde_json::Value = serde_json::from_slice(bytes).map_err(err)?;
