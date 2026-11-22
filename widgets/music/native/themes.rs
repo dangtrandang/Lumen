@@ -207,33 +207,43 @@ impl State {
     ) {
         let size = r[2] - r[0];
         let px = (size * self.dpi).round().max(1.) as i32;
+        // Use 2x supersampled resolution for the cached disc raster so every-frame
+        // bilinear rotation in Target::draw stays crisp without double-downscaling blur.
+        let ss = (px * 2).clamp(px.max(1), 512);
+        let ss_scale = ss as f32 / px.max(1) as f32;
         let url = self.playback.art.as_deref().unwrap_or("");
         let identity = self.cover_image(url).map_or(0, Image::identity);
         let key = format!(
-            "disc:{identity}:{px}:{}:{r:?}:{clip:?}:{clip_radius}",
+            "disc:{identity}:{ss}:{}:{r:?}:{clip:?}:{clip_radius}",
             self.dpi
         );
         if !self.rounded_art.borrow().contains_key(&key) {
-            if let Some(buffer) = Buffer::plain(px, px, self.dpi) {
-                let batch = render::AlphaBatch::new(buffer.dc, self.dpi);
+            let maybe_pixels = if let Some(src_img) = self.cover_image(url) {
+                src_img.lanczos_bgra(ss as u32, ss as u32)
+            } else if let Some(buffer) = Buffer::plain(ss, ss, self.dpi * ss_scale) {
+                let batch = render::AlphaBatch::new(buffer.dc, self.dpi * ss_scale);
                 self.cover(
-                    &Canvas::new(buffer.dc, self.dpi),
+                    &Canvas::new(buffer.dc, self.dpi * ss_scale),
                     url,
                     [0., 0., size, size],
                     1.,
                 );
                 drop(batch);
-                let mut pixels = buffer.snapshot();
-                for y in 0..px {
-                    for x in 0..px {
-                        let i = ((y * px + x) * 4) as usize;
-                        let dx = (x as f32 + 0.5) / px as f32 - 0.5;
-                        let dy = (y as f32 + 0.5) / px as f32 - 0.5;
+                Some(buffer.snapshot())
+            } else {
+                None
+            };
+            if let Some(mut pixels) = maybe_pixels {
+                for y in 0..ss {
+                    for x in 0..ss {
+                        let i = ((y * ss + x) * 4) as usize;
+                        let dx = (x as f32 + 0.5) / ss as f32 - 0.5;
+                        let dy = (y as f32 + 0.5) / ss as f32 - 0.5;
                         let d = (dx * dx + dy * dy).sqrt();
                         let panel_mask = (0.5
                             - crate::compositor::distance(
-                                (r[0] - clip[0]) * self.dpi + x as f32 + 0.5,
-                                (r[1] - clip[1]) * self.dpi + y as f32 + 0.5,
+                                (r[0] - clip[0]) * self.dpi + (x as f32 + 0.5) / ss_scale,
+                                (r[1] - clip[1]) * self.dpi + (y as f32 + 0.5) / ss_scale,
                                 (clip[2] - clip[0]) * self.dpi,
                                 (clip[3] - clip[1]) * self.dpi,
                                 clip_radius * self.dpi,
@@ -241,8 +251,8 @@ impl State {
                             ))
                         .clamp(0., 1.);
                         let mask = panel_mask
-                            * ((0.5 - d) * px as f32 + 0.5).clamp(0., 1.)
-                            * ((d - 0.035) * px as f32 + 0.5).clamp(0., 1.);
+                            * ((0.5 - d) * ss as f32 + 0.5).clamp(0., 1.)
+                            * ((d - 0.035) * ss as f32 + 0.5).clamp(0., 1.);
                         if d < 0.145 {
                             let angle = dy.atan2(dx);
                             let ring = ((d * 350.).sin() * 7. + (angle + 2.2).cos() * 23. + 191.)
@@ -260,7 +270,7 @@ impl State {
                         pixels.swap(i, i + 2);
                     }
                 }
-                if let Some(image) = Image::from_rgba(px as u32, px as u32, pixels) {
+                if let Some(image) = Image::from_rgba(ss as u32, ss as u32, pixels) {
                     let mut cache = self.rounded_art.borrow_mut();
                     if cache.len() >= 24 {
                         cache.clear();

@@ -6,11 +6,14 @@ Fork of [nhatnguyends/Lumen](https://github.com/nhatnguyends/Lumen) — Native R
 
 Stardock-style liquid/frosted glass desktop folder fences built natively in Rust:
 
-- **Multi-Fence Folder Containers:** Independent glass windows backed by real folders (configured in `config/fences.json`), with hardware-accelerated dragging from the title bar and resizing from all 4 edges & corners.
-- **120Hz Fade on Hover:** Fences can subtly dim when idle (`5%`, `15%`, `25%`, `50%`, or `100%`) and smoothly animate to `100%` at 120Hz when hovered.
-- **Desktop Double-Click Quick-Hide:** Double-click an empty area of the Windows desktop to hide or reveal all fences.
-- **HD Icons & DirectWrite Typography:** Extracts 48×48 shell icons (`SHIL_EXTRALARGE`) and renders crisp DirectWrite text with a subtle drop shadow over dark smoked glass.
-- **Marquee Multi-Select & Roll-Up:** Drag inside a fence to marquee-select multiple items, double-click a fence header to roll up/expand, or right-click any fence for **Fade on Hover**, **Idle Opacity**, **Icon Size (`24/32/48px`)**, **Filter & Sort** (`Show All`, `Folders Only`, `Files & Apps Only`, `Sort by Name`, `Sort by Date`, `Folders First`), **Open Folder**, and **Refresh**.
+- **Multi-Fence Folder Containers & Magnetic Corner Snapping:** Independent glass windows backed by real folders (configured in `config/fences.json`), with hardware-accelerated dragging from the title bar, resizing from all 4 edges & corners, and magnetic edge/corner snapping against neighboring fences and screen work-area borders.
+- **External Drag-and-Drop, `+` Quick-Add Menu & Recycle Bin Delete:** Drag files, folders, or shortcuts directly from Windows Explorer into any fence, or click the header `+` button / right-click menu to **Add Program / App / File...**, **Add Folder Shortcut...**, **Move Folder into This Fence...**, **New Subfolder**, or **Create New Fence from Folder...**. Press `Delete` or right-click an item to open, reveal in Explorer, or send to the Recycle Bin.
+- **Icon Drag-and-Drop Reorder & Cross-Fence Move:** Drag icons within a fence to switch to **Manual Order**, or drag single/multi-selected items directly into another fence window to move them across folders.
+- **View Modes, Image Gallery Thumbnails & Tile Text Size:** Switch per-fence between **Standard Grid**, **Photo Gallery (Large Images)**, and **Compact Tiles** with optional image thumbnail previews, **Icon Size (`24/32/48px`)**, and **Tile Text Size (`9px` Extra Small, `10px` Compact, `11px` Small, `13px` Normal, `15px` Large, `17px` Extra Large)**.
+- **Desktop Marquee Cluster Drag & `Win + D` Persistence:** Drag a marquee box across the desktop to select and move any cluster of fences and widgets together as one unit. Fences and desktop-layer widgets exclude Aero Peek (`DWMWA_EXCLUDED_FROM_PEEK`) and automatically stay above `WorkerW`/`Progman` without Z-order flicker when pressing `Win + D` (Show Desktop).
+- **120Hz Fade on Hover & Desktop Double-Click Quick-Hide:** Fences can subtly dim when idle (`5%`, `15%`, `25%`, `50%`, or `100%`) and smoothly animate to `100%` at 120Hz when hovered. Double-click an empty area of the Windows desktop to hide or reveal all fences and desktop widgets together.
+- **HD Icons & True RGB ClearType Typography:** Extracts 48×48 shell icons (`SHIL_EXTRALARGE`) and renders crisp Win32 GDI `CLEARTYPE_NATURAL_QUALITY` RGB sub-pixel text over dark smoked glass.
+- **HD Music Artwork & 2× Supersampled Spinning Disc:** YouTube Music and Windows SMTC fallback automatically fetch high-resolution cover art (`w544-h544` / `maxresdefault.jpg` / `hq720.jpg`), auto-trim letterbox bars, center-crop at native resolution with `Lanczos3` filtering, and render spinning vinyl discs at 2× supersampled resolution.
 - **Auto-Update Disabled:** Upstream GitHub release auto-updates are disabled (`update::check` returns `Ok(None)`) so local fork builds are never overwritten.
 
 ## Portable download

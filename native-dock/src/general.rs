@@ -108,8 +108,9 @@ impl Config {
 
 pub fn load_preferences(root: &Path) -> Result<(), String> {
     let config = Config::load(root)?;
-    if crate::update::portable(root) && !std::env::args().any(|arg| arg == "--smoke-test") {
-        crate::startup::set_enabled(root, config.start_with_windows)?;
+    if !std::env::args().any(|arg| arg == "--smoke-test") {
+        let fast_task = config.fast_startup && crate::startup::has_fast_startup_task();
+        crate::startup::set_enabled(root, config.start_with_windows && !fast_task)?;
     }
     Ok(())
 }
@@ -300,35 +301,14 @@ impl Host {
                     }
                 }
                 (6, Value::Bool(v)) => {
-                    if crate::update::portable(&self.root) {
-                        match crate::startup::set_enabled(&self.root, v) {
-                            Ok(()) => {
-                                self.config.start_with_windows = v;
-                                dirty = true;
-                                self.error.clear();
-                            }
-                            Err(error) => self.error = error,
-                        }
-                        continue;
-                    }
-                    use std::os::windows::process::CommandExt;
-                    let python =
-                        std::env::var_os("LUMEN_PYTHON").unwrap_or_else(|| "python".into());
-                    match std::process::Command::new(python)
-                        .arg(self.root.join("startup_windows.py"))
-                        .arg(if v { "--enable" } else { "--disable" })
-                        .creation_flags(0x08000000)
-                        .output()
-                    {
-                        Ok(out) if out.status.success() => {
+                    let fast_task = self.config.fast_startup && crate::startup::has_fast_startup_task();
+                    match crate::startup::set_enabled(&self.root, v && !fast_task) {
+                        Ok(()) => {
                             self.config.start_with_windows = v;
                             dirty = true;
                             self.error.clear();
                         }
-                        Ok(out) => {
-                            self.error = String::from_utf8_lossy(&out.stderr).trim().to_string()
-                        }
-                        Err(e) => self.error = e.to_string(),
+                        Err(error) => self.error = error,
                     }
                 }
                 (3, Value::Bool(v)) => {
@@ -364,6 +344,9 @@ impl Host {
                     match crate::startup::set_fast_startup_elevated(v) {
                         Ok(()) => {
                             self.config.fast_startup = v;
+                            if !v && self.config.start_with_windows {
+                                let _ = crate::startup::set_enabled(&self.root, true);
+                            }
                             dirty = true;
                             self.error.clear();
                         }

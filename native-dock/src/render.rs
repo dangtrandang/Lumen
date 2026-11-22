@@ -641,6 +641,49 @@ impl Image {
         }
         Self::from_rgba(size, size, pixels)
     }
+    /// Center-crops `self` (premultiplied BGRA) to the aspect ratio `target_w : target_h`
+    /// and resizes to `(target_w, target_h)` using `FilterType::Lanczos3`, returning BGRA bytes.
+    pub fn lanczos_bgra(&self, target_w: u32, target_h: u32) -> Option<Vec<u8>> {
+        if target_w == 0 || target_h == 0 || self.width == 0 || self.height == 0 {
+            return None;
+        }
+        let raw = self._pixels.as_ref()?;
+        if self.width == target_w && self.height == target_h {
+            return Some(raw.clone());
+        }
+        let source = image::RgbaImage::from_raw(self.width, self.height, raw.clone())?;
+        let src_w = self.width as f32;
+        let src_h = self.height as f32;
+        let dst_aspect = target_w as f32 / target_h as f32;
+        let src_aspect = src_w / src_h;
+        let (crop_x, crop_y, crop_w, crop_h) = if (src_aspect - dst_aspect).abs() < 0.01 {
+            (0, 0, self.width, self.height)
+        } else if src_aspect > dst_aspect {
+            let cw = ((src_h * dst_aspect).round() as u32).clamp(1, self.width);
+            ((self.width - cw) / 2, 0, cw, self.height)
+        } else {
+            let ch = ((src_w / dst_aspect).round() as u32).clamp(1, self.height);
+            (0, (self.height - ch) / 2, self.width, ch)
+        };
+        let cropped = if crop_w == self.width && crop_h == self.height {
+            source
+        } else {
+            image::imageops::crop_imm(&source, crop_x, crop_y, crop_w, crop_h).to_image()
+        };
+        let mut pixels = image::imageops::resize(
+            &cropped,
+            target_w,
+            target_h,
+            image::imageops::FilterType::Lanczos3,
+        )
+        .into_raw();
+        for p in pixels.chunks_exact_mut(4) {
+            for c in 0..3 {
+                p[c] = p[c].min(p[3]);
+            }
+        }
+        Some(pixels)
+    }
     pub fn from_rgba(width: u32, height: u32, mut pixels: Vec<u8>) -> Option<Self> {
         if pixels.len() != width as usize * height as usize * 4 {
             return None;

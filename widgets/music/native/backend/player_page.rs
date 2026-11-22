@@ -109,7 +109,8 @@ pub const MUSIC_PAGE_STATE: &str = r###"(() => {
   const hasMedia = (!!video && (video.readyState >= 1 || !!video.currentSrc || !video.paused)) || playerState === 1 || playerState === 2 || playerState === 3 || playerState === 5;
   const available = !!title && hasMedia;
   const fallbackArt = videoId ? 'https://i.ytimg.com/vi/' + videoId + '/hqdefault.jpg' : null;
-  const art = current?.thumb || imgSrc(bar?.querySelector('img')) || meta?.artwork?.at(-1)?.src || fallbackArt;
+  const heroImg = imgSrc(document.querySelector('ytmusic-player #song-image img, ytmusic-player yt-img-shadow img'));
+  const art = meta?.artwork?.at(-1)?.src || heroImg || current?.thumb || imgSrc(bar?.querySelector('img')) || fallbackArt;
   const errNode = document.querySelector('ytmusic-player yt-player-error-message-renderer #reason, ytmusic-player .ytp-error-content-wrap-reason, #movie_player .ytp-error-content-wrap-reason, ytmusic-player #error-screen #reason');
   const errText = errNode && errNode.getBoundingClientRect?.().height > 0 ? text(errNode) : '';
   return { available, playing,
@@ -645,8 +646,71 @@ fn fetch_artwork_bytes(host: &str, path: &str) -> Result<Vec<u8>, String> {
     }
 }
 
+fn upgrade_google_art_dimensions(url: &str) -> String {
+    let Some(rest) = url.strip_prefix("https://") else {
+        return url.to_owned();
+    };
+    let split_idx = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let host = rest[..split_idx]
+        .strip_suffix(":443")
+        .unwrap_or(&rest[..split_idx])
+        .to_ascii_lowercase();
+    let is_google_art = host == "googleusercontent.com"
+        || host.ends_with(".googleusercontent.com")
+        || host == "ggpht.com"
+        || host.ends_with(".ggpht.com");
+    if !is_google_art {
+        return url.to_owned();
+    }
+    let suffix = &rest[split_idx..];
+    let q_idx = suffix.find(['?', '#']).unwrap_or(suffix.len());
+    let path_part = &suffix[..q_idx];
+    let query_frag = &suffix[q_idx..];
+    let segment_start = path_part.rfind('/').map_or(0, |i| i + 1);
+    let Some(rel_eq) = path_part[segment_start..].rfind('=') else {
+        return url.to_owned();
+    };
+    let eq_idx = segment_start + rel_eq;
+    let params = &path_part[eq_idx + 1..];
+    if params.is_empty() {
+        return url.to_owned();
+    }
+    let mut out_params = String::with_capacity(params.len() + 8);
+    for (i, tok) in params.split('-').enumerate() {
+        if i > 0 {
+            out_params.push('-');
+        }
+        if let Some(num) = tok.strip_prefix('w').and_then(|n| n.parse::<u32>().ok()) {
+            if num < 544 {
+                out_params.push_str("w544");
+                continue;
+            }
+        }
+        if let Some(num) = tok.strip_prefix('h').and_then(|n| n.parse::<u32>().ok()) {
+            if num < 544 {
+                out_params.push_str("h544");
+                continue;
+            }
+        }
+        if let Some(num) = tok.strip_prefix('s').and_then(|n| n.parse::<u32>().ok()) {
+            if num < 544 {
+                out_params.push_str("s544");
+                continue;
+            }
+        }
+        out_params.push_str(tok);
+    }
+    format!(
+        "https://{}{}={}{}",
+        &rest[..split_idx],
+        &path_part[..eq_idx],
+        out_params,
+        query_frag
+    )
+}
+
 pub fn download_artwork(url: &str, cache_dir: &Path) -> Result<(String, Vec<String>), String> {
-    let normalized = normalize_art_url(url);
+    let normalized = upgrade_google_art_dimensions(&normalize_art_url(url));
     let (host, path) = parse_artwork_url(&normalized)?;
     let name = art_filename(&normalized);
     let dest = cache_dir.join(&name);
@@ -656,7 +720,20 @@ pub fn download_artwork(url: &str, cache_dir: &Path) -> Result<(String, Vec<Stri
         }
         return Ok((name, Vec::new()));
     }
-    let bytes = fetch_artwork_bytes(&host, &path)?;
+    let bytes = if (host == "i.ytimg.com" || host == "ytimg.com")
+        && (path.ends_with("/hqdefault.jpg")
+            || path.ends_with("/mqdefault.jpg")
+            || path.ends_with("/default.jpg")
+            || path.ends_with("/0.jpg"))
+    {
+        let base = path.rsplit_once('/').map(|(b, _)| b).unwrap_or(&path);
+        fetch_artwork_bytes(&host, &format!("{base}/maxresdefault.jpg"))
+            .or_else(|_| fetch_artwork_bytes(&host, &format!("{base}/hq720.jpg")))
+            .or_else(|_| fetch_artwork_bytes(&host, &format!("{base}/sddefault.jpg")))
+            .or_else(|_| fetch_artwork_bytes(&host, &path))?
+    } else {
+        fetch_artwork_bytes(&host, &path)?
+    };
     fs::create_dir_all(cache_dir).map_err(|e| e.to_string())?;
     let tmp = cache_dir.join(format!("{name}.tmp"));
     fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;

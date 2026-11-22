@@ -58,13 +58,19 @@ impl State {
         let identity = self.cover_image(url).map_or(0, Image::identity);
         let key = format!("{url}:{identity}:{pw}:{ph}:{radius}:{}", self.dpi);
         if !self.rounded_art.borrow().contains_key(&key) {
-            if let Some(buffer) = Buffer::plain(pw, ph, self.dpi) {
+            let maybe_pixels = if let Some(src_img) = self.cover_image(url) {
+                src_img.lanczos_bgra(pw as u32, ph as u32)
+            } else if let Some(buffer) = Buffer::plain(pw, ph, self.dpi) {
                 let batch = render::AlphaBatch::new(buffer.dc, self.dpi);
                 let canvas = Canvas::new(buffer.dc, self.dpi);
                 self.cover(&canvas, url, [0., 0., w, h], 1.);
                 drop(canvas);
                 drop(batch);
-                let mut pixels = buffer.snapshot();
+                Some(buffer.snapshot())
+            } else {
+                None
+            };
+            if let Some(mut pixels) = maybe_pixels {
                 for y in 0..ph {
                     for x in 0..pw {
                         let i = ((y * pw + x) * 4) as usize;

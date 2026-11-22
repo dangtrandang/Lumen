@@ -999,7 +999,64 @@ fn load_art(path: &Path) -> Option<Image> {
             return None;
         }
     };
-    let rgba = decoded.thumbnail(400, 400).into_rgba8();
+    let full = decoded.into_rgba8();
+    let (fw, fh) = full.dimensions();
+    if fw == 0 || fh == 0 {
+        return None;
+    }
+    // Auto-trim top/bottom black letterbox bars common on 4:3 YouTube thumbnails (hqdefault/sddefault).
+    let max_trim = (fh / 6) as usize;
+    let row_is_black_bar = |y: u32| -> bool {
+        let mut sum = 0u64;
+        let step = (fw / 32).max(1);
+        let mut samples = 0u64;
+        let mut x = 0;
+        while x < fw {
+            let p = full.get_pixel(x, y).0;
+            let lum = (p[0] as u64 + p[1] as u64 + p[2] as u64) / 3;
+            if lum > 22 {
+                return false;
+            }
+            sum += lum;
+            samples += 1;
+            x += step;
+        }
+        samples > 0 && (sum / samples) <= 10
+    };
+    let mut top_trim = 0usize;
+    while top_trim < max_trim && row_is_black_bar(top_trim as u32) {
+        top_trim += 1;
+    }
+    let mut bot_trim = 0usize;
+    while bot_trim < max_trim && row_is_black_bar(fh - 1 - bot_trim as u32) {
+        bot_trim += 1;
+    }
+    let sym_trim = top_trim.min(bot_trim) as u32;
+    let active_h = (fh - sym_trim * 2).max(1);
+    // Center-crop to a square at full native resolution so 16:9 thumbnails keep full vertical detail.
+    let side = fw.min(active_h);
+    let cx = (fw - side) / 2;
+    let cy = sym_trim + (active_h - side) / 2;
+    let square = image::imageops::crop_imm(&full, cx, cy, side, side).to_image();
+    let target_side = side.clamp(360, 512);
+    let rgba = if side == target_side {
+        square
+    } else if side < target_side {
+        let up = image::imageops::resize(
+            &square,
+            target_side,
+            target_side,
+            image::imageops::FilterType::Lanczos3,
+        );
+        image::imageops::unsharpen(&up, 0.8, 2)
+    } else {
+        image::imageops::resize(
+            &square,
+            target_side,
+            target_side,
+            image::imageops::FilterType::Lanczos3,
+        )
+    };
     let (w, h) = rgba.dimensions();
     let mut pixels = rgba.into_raw();
     for p in pixels.chunks_exact_mut(4) {

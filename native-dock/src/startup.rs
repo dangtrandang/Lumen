@@ -143,6 +143,14 @@ fn apply_task_scheduler(root: &Path, enabled: bool) -> Result<(), String> {
     }
 }
 
+pub fn has_fast_startup_task() -> bool {
+    Command::new("schtasks.exe")
+        .args(["/Query", "/TN", TASK_NAME])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .is_ok_and(|out| out.status.success())
+}
+
 pub fn set_fast_startup_elevated(enabled: bool) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let verb = crate::model::wide("runas");

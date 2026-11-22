@@ -17,6 +17,7 @@ use std::{
 };
 use windows_sys::Win32::{
     Foundation::{FILETIME, S_OK},
+    Networking::WinHttp::*,
     System::SystemInformation::GetSystemTimeAsFileTime,
 };
 
@@ -380,6 +381,152 @@ unsafe fn read_thumbnail_bytes(thumb_ref: &ComPtr) -> Option<Vec<u8>> {
     }
 }
 
+fn url_encode_query(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 2);
+    for b in s.as_bytes() {
+        match *b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => out.push(*b as char),
+            b' ' => out.push('+'),
+            other => {
+                use std::fmt::Write;
+                let _ = write!(&mut out, "%{other:02X}");
+            }
+        }
+    }
+    out
+}
+
+unsafe fn winhttp_get_bytes(host: &str, path: &str, max_bytes: usize) -> Option<Vec<u8>> {
+    struct H(*mut c_void);
+    impl Drop for H {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe {
+                    WinHttpCloseHandle(self.0);
+                }
+            }
+        }
+    }
+    let session = H(WinHttpOpen(
+        crate::model::wide("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Lumen/0.1").as_ptr(),
+        WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+        std::ptr::null(),
+        std::ptr::null(),
+        0,
+    ));
+    if session.0.is_null() {
+        return None;
+    }
+    WinHttpSetTimeouts(session.0, 2500, 2500, 2500, 2500);
+    let conn = H(WinHttpConnect(
+        session.0,
+        crate::model::wide(host).as_ptr(),
+        443,
+        0,
+    ));
+    if conn.0.is_null() {
+        return None;
+    }
+    let req = H(WinHttpOpenRequest(
+        conn.0,
+        crate::model::wide("GET").as_ptr(),
+        crate::model::wide(path).as_ptr(),
+        std::ptr::null(),
+        std::ptr::null(),
+        std::ptr::null(),
+        WINHTTP_FLAG_SECURE,
+    ));
+    if req.0.is_null() {
+        return None;
+    }
+    if WinHttpSendRequest(
+        req.0,
+        std::ptr::null(),
+        0,
+        std::ptr::null(),
+        0,
+        0,
+        0,
+    ) == 0
+        || WinHttpReceiveResponse(req.0, null_mut()) == 0
+    {
+        return None;
+    }
+    let mut status = 0u32;
+    let mut status_len = 4u32;
+    if WinHttpQueryHeaders(
+        req.0,
+        WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+        std::ptr::null(),
+        &mut status as *mut _ as _,
+        &mut status_len,
+        null_mut(),
+    ) == 0
+        || status != 200
+    {
+        return None;
+    }
+    let mut body = Vec::new();
+    let mut chunk = [0u8; 32768];
+    loop {
+        let mut read = 0u32;
+        if WinHttpReadData(req.0, chunk.as_mut_ptr() as _, chunk.len() as u32, &mut read) == 0 {
+            return None;
+        }
+        if read == 0 {
+            break;
+        }
+        body.extend_from_slice(&chunk[..read as usize]);
+        if body.len() >= max_bytes {
+            break;
+        }
+    }
+    Some(body)
+}
+
+unsafe fn fetch_hd_thumbnail_for_track(title: &str, artist: &str) -> Option<Vec<u8>> {
+    let query = if artist.trim().is_empty() {
+        title.trim().to_string()
+    } else {
+        format!("{} {}", title.trim(), artist.trim())
+    };
+    if query.is_empty() {
+        return None;
+    }
+    let path = format!("/results?search_query={}", url_encode_query(&query));
+    let html_bytes = winhttp_get_bytes("www.youtube.com", &path, 768 * 1024)?;
+    let html = String::from_utf8_lossy(&html_bytes);
+    let marker = "\"videoId\":\"";
+    let mut search_from = 0;
+    let mut video_id = None;
+    while let Some(pos) = html[search_from..].find(marker) {
+        let start = search_from + pos + marker.len();
+        if start + 11 <= html.len() {
+            let candidate = &html[start..start + 11];
+            if candidate
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            {
+                video_id = Some(candidate.to_string());
+                break;
+            }
+        }
+        search_from = start;
+    }
+    let vid = video_id?;
+    for file in ["maxresdefault.jpg", "hq720.jpg", "sddefault.jpg", "hqdefault.jpg"] {
+        let img_path = format!("/vi/{vid}/{file}");
+        if let Some(bytes) = winhttp_get_bytes("i.ytimg.com", &img_path, 4 * 1024 * 1024) {
+            if let Ok(decoded) = image::load_from_memory(&bytes) {
+                if decoded.width() >= 400 && decoded.height() >= 300 {
+                    return Some(bytes);
+                }
+            }
+        }
+    }
+    None
+}
+
 fn cache_thumbnail(art_dir: &Path, bytes: &[u8]) -> Option<(String, String)> {
     let hex = format!("{:x}", Sha256::digest(bytes));
     if hex.len() != 64 {
@@ -512,15 +659,26 @@ unsafe fn poll_session(
     if key != *cached_key {
         *cached_key = key;
         *cached_art = None;
+        let mut best_bytes = None;
         type GetThumbFn = unsafe extern "system" fn(*mut c_void, *mut *mut c_void) -> i32;
         let get_thumb: GetThumbFn = std::mem::transmute(props.slot(15));
         let mut thumb_ptr = null_mut();
         if get_thumb(props.as_ptr(), &mut thumb_ptr) >= 0 {
             if let Some(thumb_ref) = ComPtr::from_raw(thumb_ptr) {
-                if let Some(bytes) = read_thumbnail_bytes(&thumb_ref) {
-                    *cached_art = cache_thumbnail(art_dir, &bytes);
-                }
+                best_bytes = read_thumbnail_bytes(&thumb_ref);
             }
+        }
+        let is_low_res = best_bytes.as_ref().is_none_or(|b| {
+            image::load_from_memory(b)
+                .map_or(true, |img| img.width() < 400 || img.height() < 360)
+        });
+        if is_low_res && !title.trim().is_empty() {
+            if let Some(hd_bytes) = fetch_hd_thumbnail_for_track(&title, &artist) {
+                best_bytes = Some(hd_bytes);
+            }
+        }
+        if let Some(bytes) = best_bytes {
+            *cached_art = cache_thumbnail(art_dir, &bytes);
         }
     }
 

@@ -18,7 +18,9 @@ impl WidgetHost for super::Host {
     unsafe fn refresh(&mut self) {
         self.refresh();
     }
-    unsafe fn tick(&mut self) {}
+    unsafe fn tick(&mut self) {
+        self.tick();
+    }
 }
 
 pub(crate) fn definition() -> NativeDefinition {

@@ -60,6 +60,7 @@ use windows_sys::Win32::{
 const CLASS: &str = "LumenNativeFenceWindow";
 const MARQUEE_CLASS: &str = "LumenDesktopMarqueeOverlay";
 const FADE_TIMER: usize = 201;
+const ZORDER_WATCH_TIMER: usize = 202;
 const EASE: [f32; 4] = [0.25, 0.1, 0.25, 1.0];
 const HEADER_H: f32 = 34.0;
 const RADIUS: f32 = 18.0;
@@ -90,6 +91,8 @@ const CMD_FILTER_FILES: usize = 1032;
 const CMD_FOLDERS_FIRST: usize = 1033;
 const CMD_SORT_MANUAL: usize = 1034;
 
+const CMD_TEXT_9: usize = 1038;
+const CMD_TEXT_10: usize = 1039;
 const CMD_TEXT_11: usize = 1040;
 const CMD_TEXT_13: usize = 1041;
 const CMD_TEXT_15: usize = 1042;
@@ -117,7 +120,7 @@ fn cell_dims(spec: &FenceSpec) -> (f32, f32, f32) {
         _ => spec.icon_size,
     };
     let icon = base_icon.clamp(20, 96) as f32;
-    let text_extra = (spec.text_size.clamp(10, 20) - 13).max(0) as f32 * 2.5;
+    let text_extra = (spec.text_size.clamp(8, 20) - 13).max(0) as f32 * 2.5;
     let (cw, ch) = match spec.view_mode.as_str() {
         "gallery" => (
             (icon + 28.0 + text_extra).max(96.0),
@@ -717,11 +720,18 @@ impl Host {
         }
         if let Some(first) = windows.first() {
             if !smoke {
-                register_raw_mouse_sink(first.borrow().hwnd);
+                let first_hwnd = first.borrow().hwnd;
+                register_raw_mouse_sink(first_hwnd);
+                SetTimer(first_hwnd, ZORDER_WATCH_TIMER, 100, None);
             }
         }
         shared.borrow_mut().windows = windows;
+        log_zorder_snapshot("fences-init", &shared);
         Ok(Self { shared })
+    }
+
+    pub unsafe fn tick(&mut self) {
+        check_and_repair_zorder(&self.shared);
     }
 
     pub unsafe fn show(&mut self) {
@@ -792,6 +802,109 @@ unsafe fn register_raw_mouse_sink(hwnd: HWND) {
         hwndTarget: hwnd,
     };
     let _ = RegisterRawInputDevices(&rid, 1, size_of::<RAWINPUTDEVICE>() as u32);
+}
+
+unsafe fn log_zorder_snapshot(tag: &str, shared: &Rc<RefCell<SharedState>>) {
+    let shell_host = crate::desktop_layer::desktop_shell_host();
+    let progman = FindWindowW(wide("Progman").as_ptr(), null());
+    let fg = GetForegroundWindow();
+    let sh_ex = if !shell_host.is_null() {
+        GetWindowLongPtrW(shell_host, GWL_EXSTYLE)
+    } else {
+        0
+    };
+    let pm_ex = if !progman.is_null() {
+        GetWindowLongPtrW(progman, GWL_EXSTYLE)
+    } else {
+        0
+    };
+    let mut fence_states = Vec::new();
+    let wins = shared.borrow().windows.clone();
+    for w in &wins {
+        if let Ok(b) = w.try_borrow() {
+            let vis = IsWindowVisible(b.hwnd) != 0;
+            let iconic = IsIconic(b.hwnd) != 0;
+            let below = crate::desktop_layer::is_below_desktop(b.hwnd);
+            let ex = GetWindowLongPtrW(b.hwnd, GWL_EXSTYLE);
+            let owner = GetWindowLongPtrW(b.hwnd, GWLP_HWNDPARENT) as HWND;
+            let mut pt = POINT { x: 0, y: 0 };
+            let mut wr: RECT = zeroed();
+            GetWindowRect(b.hwnd, &mut wr);
+            pt.x = (wr.left + wr.right) / 2;
+            pt.y = (wr.top + wr.bottom) / 2;
+            let hit = WindowFromPoint(pt);
+            let hit_root = if !hit.is_null() {
+                GetAncestor(hit, GA_ROOT)
+            } else {
+                null_mut()
+            };
+            fence_states.push(format!(
+                "id={} hwnd={:?} vis={}(model={}) iconic={} below_desk={} ex=0x{:x} owner={:?}({}) center_hit={:?}({}/root={:?}:{})",
+                b.spec_id,
+                b.hwnd,
+                vis,
+                b.visible,
+                iconic,
+                below,
+                ex,
+                owner,
+                crate::desktop_layer::hwnd_class(owner),
+                hit,
+                crate::desktop_layer::hwnd_class(hit),
+                hit_root,
+                crate::desktop_layer::hwnd_class(hit_root),
+            ));
+        }
+    }
+    let mut stack = Vec::new();
+    let mut cur = GetTopWindow(null_mut());
+    for _ in 0..256 {
+        if cur.is_null() || stack.len() >= 18 {
+            break;
+        }
+        if IsWindowVisible(cur) != 0 {
+            let cls = crate::desktop_layer::hwnd_class(cur);
+            let title = crate::desktop_layer::hwnd_title(cur);
+            let ex = GetWindowLongPtrW(cur, GWL_EXSTYLE);
+            let iconic = IsIconic(cur) != 0;
+            stack.push(format!(
+                "{:?}:{}:{:?}(ex=0x{:x},ic={},dl={})",
+                cur,
+                cls,
+                title,
+                ex,
+                iconic as u8,
+                crate::desktop_layer::contains(cur) as u8
+            ));
+        }
+        cur = GetWindow(cur, GW_HWNDNEXT);
+    }
+    crate::logger::info(
+        "win-d",
+        format!(
+            "[{}] fg={:?}({}:{:?}) shell_host={:?}({},ex=0x{:x}) progman={:?}(ex=0x{:x}) fences=[{}] top_z=[{}]",
+            tag,
+            fg,
+            crate::desktop_layer::hwnd_class(fg),
+            crate::desktop_layer::hwnd_title(fg),
+            shell_host,
+            crate::desktop_layer::hwnd_class(shell_host),
+            sh_ex,
+            progman,
+            pm_ex,
+            fence_states.join("; "),
+            stack.join(" -> ")
+        ),
+    );
+}
+
+unsafe fn check_and_repair_zorder(shared: &Rc<RefCell<SharedState>>) {
+    if shared.borrow().quick_hidden {
+        return;
+    }
+    if crate::desktop_layer::repair_if_below_desktop() {
+        log_zorder_snapshot("watch-repaired-win-d", shared);
+    }
 }
 
 unsafe fn create_marquee_overlay() -> HWND {
@@ -1268,8 +1381,10 @@ impl FenceWindow {
                 DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX,
             ));
 
-            let add_bg_alpha = if self.hover_add { 55 } else { 18 };
-            c.round([w - 62.0, 5.0, w - 36.0, 29.0], 6.0, 0xffffff, add_bg_alpha, false, false);
+            let add_bg_alpha = if self.hover_add { 45 } else { 0 };
+            if add_bg_alpha > 0 {
+                c.round([w - 62.0, 5.0, w - 36.0, 29.0], 6.0, 0xffffff, add_bg_alpha, false, false);
+            }
             text_draws.push((
                 "+".into(),
                 [
@@ -1314,7 +1429,7 @@ impl FenceWindow {
                 }
                 let start_x = (PAD_X + ((w - PAD_X * 2.0) - cols as f32 * cell_w) * 0.5).round();
                 let entry_count = self.entries.len();
-                let tile_font_px = (spec.text_size.clamp(10, 22) as f32 * dpi).round() as i32;
+                let tile_font_px = (spec.text_size.clamp(8, 22) as f32 * dpi).round() as i32;
                 let active_drag_idx = self.item_drag.filter(|d| d.active).map(|d| d.idx);
                 for idx in 0..entry_count {
                     let row = idx / cols;
@@ -1462,46 +1577,48 @@ impl FenceWindow {
         Some(idx)
     }
 
-    unsafe fn open_item(&self, idx: usize) {
-        if let Some(entry) = self.entries.get(idx) {
-            let p = wide(&entry.path);
-            ShellExecuteW(
-                null_mut(),
-                wide("open").as_ptr(),
-                p.as_ptr(),
-                null(),
-                null(),
-                SW_SHOWNORMAL,
-            );
-        }
+    unsafe fn open_path(path: &Path) {
+        let p = wide(path);
+        ShellExecuteW(
+            null_mut(),
+            wide("open").as_ptr(),
+            p.as_ptr(),
+            null(),
+            null(),
+            SW_SHOWNORMAL,
+        );
     }
 
-    unsafe fn reveal_item(&self, idx: usize) {
-        if let Some(entry) = self.entries.get(idx) {
-            let arg = format!("/select,\"{}\"", entry.path.to_string_lossy());
-            ShellExecuteW(
-                null_mut(),
-                wide("open").as_ptr(),
-                wide("explorer.exe").as_ptr(),
-                wide(&arg).as_ptr(),
-                null(),
-                SW_SHOWNORMAL,
-            );
-        }
+    unsafe fn reveal_path(path: &Path) {
+        let arg = format!("/select,\"{}\"", path.to_string_lossy());
+        ShellExecuteW(
+            null_mut(),
+            wide("open").as_ptr(),
+            wide("explorer.exe").as_ptr(),
+            wide(&arg).as_ptr(),
+            null(),
+            SW_SHOWNORMAL,
+        );
     }
 
-    unsafe fn delete_selected_items(&mut self) {
-        if self.selected.is_empty() {
-            return;
-        }
-        let mut idxs: Vec<usize> = self.selected.iter().copied().collect();
-        idxs.sort_unstable();
-        let mut paths = Vec::new();
-        for idx in idxs {
-            if let Some(e) = self.entries.get(idx) {
-                paths.push(e.path.clone());
+    unsafe fn delete_selected_for_window(win: &RefCell<FenceWindow>) {
+        let paths = {
+            let Ok(b) = win.try_borrow() else {
+                return;
+            };
+            if b.selected.is_empty() {
+                return;
             }
-        }
+            let mut idxs: Vec<usize> = b.selected.iter().copied().collect();
+            idxs.sort_unstable();
+            let mut out = Vec::new();
+            for idx in idxs {
+                if let Some(e) = b.entries.get(idx) {
+                    out.push(e.path.clone());
+                }
+            }
+            out
+        };
         let mut any_deleted = false;
         for p in paths {
             if delete_entry_path(&p).is_ok() {
@@ -1509,17 +1626,16 @@ impl FenceWindow {
             }
         }
         if any_deleted {
-            self.selected.clear();
-            self.hover_item = None;
-            self.reload_entries();
-            self.paint();
+            if let Ok(mut b) = win.try_borrow_mut() {
+                b.selected.clear();
+                b.hover_item = None;
+                b.reload_entries();
+                b.paint();
+            }
         }
     }
 
-    unsafe fn pick_files_to_add(&mut self) {
-        let Some(spec) = self.spec() else {
-            return;
-        };
+    unsafe fn pick_files_dialog(hwnd: HWND) -> Vec<PathBuf> {
         let mut buffer = vec![0u16; 32768];
         let filter = wide(
             "Programs, Shortcuts & All Files\0*.*\0Applications & Shortcuts (*.exe;*.lnk;*.url)\0*.exe;*.lnk;*.url\0",
@@ -1527,7 +1643,7 @@ impl FenceWindow {
         let title = wide("Select Programs, Shortcuts or Files to Add to Fence");
         let mut dialog: OPENFILENAMEW = zeroed();
         dialog.lStructSize = size_of::<OPENFILENAMEW>() as u32;
-        dialog.hwndOwner = self.hwnd;
+        dialog.hwndOwner = hwnd;
         dialog.lpstrFilter = filter.as_ptr();
         dialog.lpstrFile = buffer.as_mut_ptr();
         dialog.nMaxFile = buffer.len() as u32;
@@ -1539,31 +1655,20 @@ impl FenceWindow {
             | OFN_NOCHANGEDIR
             | OFN_ALLOWMULTISELECT;
         if GetOpenFileNameW(&mut dialog) == 0 {
-            return;
+            return Vec::new();
         }
         let parts: Vec<String> = buffer
             .split(|c| *c == 0)
             .take_while(|s| !s.is_empty())
             .map(String::from_utf16_lossy)
             .collect();
-        let paths: Vec<PathBuf> = if parts.len() <= 1 {
+        if parts.len() <= 1 {
             parts.into_iter().map(PathBuf::from).collect()
         } else {
             parts[1..]
                 .iter()
                 .map(|p| PathBuf::from(&parts[0]).join(p))
                 .collect()
-        };
-        let dst_dir = Path::new(&spec.folder);
-        let mut added = false;
-        for p in paths {
-            if import_external_path_into_fence(&p, dst_dir, false).is_ok() {
-                added = true;
-            }
-        }
-        if added {
-            self.reload_entries();
-            self.paint();
         }
     }
 
@@ -1590,65 +1695,6 @@ impl FenceWindow {
             CoUninitialize();
         }
         out
-    }
-
-    unsafe fn pick_folder_for_fence(&mut self, as_shortcut: bool) {
-        let Some(spec) = self.spec() else {
-            return;
-        };
-        let prompt = if as_shortcut {
-            "Choose a Folder to Add as a Shortcut inside This Fence"
-        } else {
-            "Choose a Folder to Move into This Fence"
-        };
-        if let Some(folder_path) = Self::browse_folder_dialog(self.hwnd, prompt) {
-            let dst_dir = Path::new(&spec.folder);
-            if import_external_path_into_fence(&folder_path, dst_dir, as_shortcut).is_ok() {
-                self.reload_entries();
-                self.paint();
-            }
-        }
-    }
-
-    unsafe fn create_new_fence_from_picked_folder(&mut self) {
-        let Some(folder_path) = Self::browse_folder_dialog(
-            self.hwnd,
-            "Choose any Folder to Create a New Desktop Fence",
-        ) else {
-            return;
-        };
-        let title = folder_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("Folder")
-            .to_string();
-        let id = format!(
-            "fence-{}",
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or(1)
-        );
-        let mut wr: RECT = zeroed();
-        GetWindowRect(self.hwnd, &mut wr);
-        let new_spec = FenceSpec {
-            id,
-            title,
-            folder: folder_path.to_string_lossy().into_owned(),
-            position: [(wr.left + 36).min(1400), (wr.top + 36).min(700)],
-            size: [360, 260],
-            ..FenceSpec::default()
-        };
-        let shared = Rc::clone(&self.shared);
-        {
-            let root = shared.borrow().root.clone();
-            let mut sh = shared.borrow_mut();
-            sh.config.fences.push(new_spec.clone());
-            let _ = sh.config.save(&root);
-        }
-        if let Ok(new_win) = create_fence_window(&new_spec, Rc::clone(&shared), false) {
-            shared.borrow_mut().windows.push(new_win);
-        }
     }
 
     unsafe fn apply_menu_command(&mut self, cmd: usize) {
@@ -1695,8 +1741,10 @@ impl FenceWindow {
                 self.update_spec(|s| s.icon_size = sz);
                 InvalidateRect(self.hwnd, null(), 0);
             }
-            CMD_TEXT_11 | CMD_TEXT_13 | CMD_TEXT_15 | CMD_TEXT_17 => {
+            CMD_TEXT_9 | CMD_TEXT_10 | CMD_TEXT_11 | CMD_TEXT_13 | CMD_TEXT_15 | CMD_TEXT_17 => {
                 let tsz = match cmd {
+                    CMD_TEXT_9 => 9,
+                    CMD_TEXT_10 => 10,
                     CMD_TEXT_11 => 11,
                     CMD_TEXT_15 => 15,
                     CMD_TEXT_17 => 17,
@@ -1767,19 +1815,6 @@ impl FenceWindow {
                 self.reload_entries();
                 InvalidateRect(self.hwnd, null(), 0);
             }
-            CMD_OPEN_FOLDER => {
-                let p = wide(&spec.folder);
-                ShellExecuteW(null_mut(), wide("open").as_ptr(), p.as_ptr(), null(), null(), SW_SHOWNORMAL);
-            }
-            CMD_ADD_FILES => {
-                self.pick_files_to_add();
-            }
-            CMD_ADD_FOLDER_LINK => {
-                self.pick_folder_for_fence(true);
-            }
-            CMD_MOVE_FOLDER_IN => {
-                self.pick_folder_for_fence(false);
-            }
             CMD_NEW_SUBFOLDER => {
                 if let Ok(created) = create_new_subfolder(Path::new(&spec.folder)) {
                     self.reload_entries();
@@ -1789,22 +1824,6 @@ impl FenceWindow {
                     }
                     self.paint();
                 }
-            }
-            CMD_NEW_FENCE_FROM_FOLDER => {
-                self.create_new_fence_from_picked_folder();
-            }
-            CMD_ITEM_OPEN => {
-                if let Some(&idx) = self.selected.iter().next() {
-                    self.open_item(idx);
-                }
-            }
-            CMD_ITEM_REVEAL => {
-                if let Some(&idx) = self.selected.iter().next() {
-                    self.reveal_item(idx);
-                }
-            }
-            CMD_ITEM_DELETE => {
-                self.delete_selected_items();
             }
             CMD_REFRESH => {
                 self.reload_entries();
@@ -1819,6 +1838,134 @@ impl FenceWindow {
                 }
             }
             _ => {}
+        }
+    }
+}
+
+unsafe fn execute_menu_command(win: &RefCell<FenceWindow>, cmd: usize) {
+    match cmd {
+        CMD_ADD_FILES => {
+            let (hwnd, folder) = {
+                let b = win.borrow();
+                let Some(spec) = b.spec() else {
+                    return;
+                };
+                (b.hwnd, spec.folder)
+            };
+            let paths = FenceWindow::pick_files_dialog(hwnd);
+            if paths.is_empty() {
+                return;
+            }
+            let dst_dir = Path::new(&folder);
+            let mut added = false;
+            for p in paths {
+                if import_external_path_into_fence(&p, dst_dir, false).is_ok() {
+                    added = true;
+                }
+            }
+            if added {
+                let mut b = win.borrow_mut();
+                b.reload_entries();
+                b.paint();
+            }
+        }
+        CMD_ADD_FOLDER_LINK | CMD_MOVE_FOLDER_IN => {
+            let as_shortcut = cmd == CMD_ADD_FOLDER_LINK;
+            let (hwnd, folder) = {
+                let b = win.borrow();
+                let Some(spec) = b.spec() else {
+                    return;
+                };
+                (b.hwnd, spec.folder)
+            };
+            let prompt = if as_shortcut {
+                "Choose a Folder to Add as a Shortcut inside This Fence"
+            } else {
+                "Choose a Folder to Move into This Fence"
+            };
+            if let Some(folder_path) = FenceWindow::browse_folder_dialog(hwnd, prompt) {
+                let dst_dir = Path::new(&folder);
+                if import_external_path_into_fence(&folder_path, dst_dir, as_shortcut).is_ok() {
+                    let mut b = win.borrow_mut();
+                    b.reload_entries();
+                    b.paint();
+                }
+            }
+        }
+        CMD_NEW_FENCE_FROM_FOLDER => {
+            let (hwnd, shared) = {
+                let b = win.borrow();
+                (b.hwnd, Rc::clone(&b.shared))
+            };
+            let Some(folder_path) = FenceWindow::browse_folder_dialog(
+                hwnd,
+                "Choose any Folder to Create a New Desktop Fence",
+            ) else {
+                return;
+            };
+            let title = folder_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("Folder")
+                .to_string();
+            let id = format!(
+                "fence-{}",
+                SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .map(|d| d.as_millis())
+                    .unwrap_or(1)
+            );
+            let mut wr: RECT = zeroed();
+            GetWindowRect(hwnd, &mut wr);
+            let new_spec = FenceSpec {
+                id,
+                title,
+                folder: folder_path.to_string_lossy().into_owned(),
+                position: [(wr.left + 36).min(1400), (wr.top + 36).min(700)],
+                size: [360, 260],
+                ..FenceSpec::default()
+            };
+            {
+                let root = shared.borrow().root.clone();
+                let mut sh = shared.borrow_mut();
+                sh.config.fences.push(new_spec.clone());
+                let _ = sh.config.save(&root);
+            }
+            if let Ok(new_win) = create_fence_window(&new_spec, Rc::clone(&shared), false) {
+                shared.borrow_mut().windows.push(new_win);
+            }
+        }
+        CMD_OPEN_FOLDER => {
+            let folder = win.try_borrow().ok().and_then(|b| b.spec()).map(|s| s.folder);
+            if let Some(f) = folder {
+                FenceWindow::open_path(Path::new(&f));
+            }
+        }
+        CMD_ITEM_OPEN => {
+            let path = win.try_borrow().ok().and_then(|b| {
+                let &idx = b.selected.iter().next()?;
+                b.entries.get(idx).map(|e| e.path.clone())
+            });
+            if let Some(p) = path {
+                FenceWindow::open_path(&p);
+            }
+        }
+        CMD_ITEM_REVEAL => {
+            let path = win.try_borrow().ok().and_then(|b| {
+                let &idx = b.selected.iter().next()?;
+                b.entries.get(idx).map(|e| e.path.clone())
+            });
+            if let Some(p) = path {
+                FenceWindow::reveal_path(&p);
+            }
+        }
+        CMD_ITEM_DELETE => {
+            FenceWindow::delete_selected_for_window(win);
+        }
+        _ => {
+            if let Ok(mut b) = win.try_borrow_mut() {
+                b.apply_menu_command(cmd);
+            }
         }
     }
 }
@@ -1848,7 +1995,7 @@ unsafe fn run_add_menu(win: &RefCell<FenceWindow>, sx: i32, sy: i32) {
     ) as usize;
     DestroyMenu(menu);
     if cmd != 0 {
-        win.borrow_mut().apply_menu_command(cmd);
+        execute_menu_command(win, cmd);
     }
 }
 
@@ -1923,7 +2070,9 @@ unsafe fn run_context_menu(win: &RefCell<FenceWindow>, mut sx: i32, mut sy: i32)
     AppendMenuW(icon_menu, flag(spec.icon_size >= 40), CMD_ICON_48, wide("Large (48px)").as_ptr());
 
     let ts = if spec.text_size <= 0 { 13 } else { spec.text_size };
-    AppendMenuW(text_menu, flag(ts <= 11), CMD_TEXT_11, wide("Small (11px)").as_ptr());
+    AppendMenuW(text_menu, flag(ts <= 9), CMD_TEXT_9, wide("Extra Small (9px)").as_ptr());
+    AppendMenuW(text_menu, flag(ts == 10), CMD_TEXT_10, wide("Compact (10px)").as_ptr());
+    AppendMenuW(text_menu, flag(ts == 11), CMD_TEXT_11, wide("Small (11px)").as_ptr());
     AppendMenuW(text_menu, flag(ts > 11 && ts <= 13), CMD_TEXT_13, wide("Normal (13px)").as_ptr());
     AppendMenuW(text_menu, flag(ts > 13 && ts <= 15), CMD_TEXT_15, wide("Large (15px)").as_ptr());
     AppendMenuW(text_menu, flag(ts >= 16), CMD_TEXT_17, wide("Extra Large (17px)").as_ptr());
@@ -1982,7 +2131,7 @@ unsafe fn run_context_menu(win: &RefCell<FenceWindow>, mut sx: i32, mut sy: i32)
     DestroyMenu(menu);
 
     if cmd != 0 {
-        win.borrow_mut().apply_menu_command(cmd);
+        execute_menu_command(win, cmd);
     }
 }
 
@@ -2193,17 +2342,24 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         WM_PAINT => {
             let mut ps: PAINTSTRUCT = zeroed();
             BeginPaint(hwnd, &mut ps);
-            win.borrow_mut().paint();
+            if let Ok(mut b) = win.try_borrow_mut() {
+                b.paint();
+            }
             EndPaint(hwnd, &ps);
             0
         }
         WM_INPUT => {
-            let shared = win.borrow().shared.clone();
-            handle_raw_mouse(lp, &shared);
+            if let Ok(b) = win.try_borrow() {
+                let shared = b.shared.clone();
+                drop(b);
+                handle_raw_mouse(lp, &shared);
+            }
             0
         }
         WM_TIMER if wp == FADE_TIMER => {
-            let b = win.borrow();
+            let Ok(b) = win.try_borrow() else {
+                return 0;
+            };
             let now = b.now();
             let done = !b.alpha_tween.moving(now);
             drop(b);
@@ -2213,11 +2369,20 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             InvalidateRect(hwnd, null(), 0);
             0
         }
+        WM_TIMER if wp == ZORDER_WATCH_TIMER => {
+            if let Ok(b) = win.try_borrow() {
+                let shared = b.shared.clone();
+                drop(b);
+                check_and_repair_zorder(&shared);
+            }
+            0
+        }
         WM_SETCURSOR => {
-            let b = win.borrow();
             let dpi = (GetDpiForWindow(hwnd).max(96) as f32) / 96.0;
-            let rolled = b.spec().is_some_and(|s| s.rolled_up);
-            drop(b);
+            let rolled = win
+                .try_borrow()
+                .ok()
+                .is_some_and(|b| b.spec().is_some_and(|s| s.rolled_up));
             let mut pt: POINT = zeroed();
             GetCursorPos(&mut pt);
             ScreenToClient(hwnd, &mut pt);
@@ -2235,7 +2400,9 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             1
         }
         WM_MOUSEMOVE => {
-            let mut b = win.borrow_mut();
+            let Ok(mut b) = win.try_borrow_mut() else {
+                return 0;
+            };
             b.set_hover(true);
             let mut pt: POINT = zeroed();
             GetCursorPos(&mut pt);
@@ -2373,7 +2540,9 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             0
         }
         WM_MOUSELEAVE => {
-            let mut b = win.borrow_mut();
+            let Ok(mut b) = win.try_borrow_mut() else {
+                return 0;
+            };
             b.hover_item = None;
             b.hover_roll = false;
             b.hover_add = false;
@@ -2381,7 +2550,9 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             0
         }
         WM_LBUTTONDOWN => {
-            let mut b = win.borrow_mut();
+            let Ok(mut b) = win.try_borrow_mut() else {
+                return 0;
+            };
             let dpi = (GetDpiForWindow(hwnd).max(96) as f32) / 96.0;
             let lx = (lp as i16) as f32 / dpi;
             let ly = ((lp >> 16) as i16) as f32 / dpi;
@@ -2453,8 +2624,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         }
         WM_LBUTTONUP => {
             let mut cross_fence_move: Option<(Rc<RefCell<FenceWindow>>, Vec<PathBuf>, String)> = None;
-            {
-                let mut b = win.borrow_mut();
+            if let Ok(mut b) = win.try_borrow_mut() {
                 if let Some(idrag) = b.item_drag.take() {
                     ReleaseCapture();
                     if idrag.active && idrag.idx < b.entries.len() {
@@ -2551,8 +2721,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                     }
                 }
                 if any_moved {
-                    {
-                        let mut b = win.borrow_mut();
+                    if let Ok(mut b) = win.try_borrow_mut() {
                         b.selected.clear();
                         b.reload_entries();
                         b.paint();
@@ -2566,7 +2735,9 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             0
         }
         WM_EXITSIZEMOVE => {
-            let mut b = win.borrow_mut();
+            let Ok(mut b) = win.try_borrow_mut() else {
+                return 0;
+            };
             let mut wr: RECT = zeroed();
             GetWindowRect(hwnd, &mut wr);
             b.update_spec(|s| s.position = [wr.left, wr.top]);
@@ -2575,22 +2746,29 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             0
         }
         WM_LBUTTONDBLCLK => {
-            let mut b = win.borrow_mut();
-            b.item_drag = None;
             let dpi = (GetDpiForWindow(hwnd).max(96) as f32) / 96.0;
             let lx = (lp as i16) as f32 / dpi;
             let ly = ((lp >> 16) as i16) as f32 / dpi;
-            if ly < HEADER_H {
-                b.toggle_roll();
-            } else if let Some(idx) = b.hit_item(lx, ly) {
-                b.open_item(idx);
-            } else {
-                b.toggle_roll();
+            let mut to_open = None;
+            if let Ok(mut b) = win.try_borrow_mut() {
+                b.item_drag = None;
+                if ly < HEADER_H {
+                    b.toggle_roll();
+                } else if let Some(idx) = b.hit_item(lx, ly) {
+                    to_open = b.entries.get(idx).map(|e| e.path.clone());
+                } else {
+                    b.toggle_roll();
+                }
+            }
+            if let Some(path) = to_open {
+                FenceWindow::open_path(&path);
             }
             0
         }
         WM_MOUSEWHEEL => {
-            let mut b = win.borrow_mut();
+            let Ok(mut b) = win.try_borrow_mut() else {
+                return 0;
+            };
             let delta = ((wp >> 16) as u16 as i16) as f32;
             b.scroll_y = (b.scroll_y - delta / 120.0 * 48.0).max(0.0);
             InvalidateRect(hwnd, null(), 0);
@@ -2598,7 +2776,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         }
         WM_KEYDOWN => {
             if wp == VK_DELETE as usize {
-                win.borrow_mut().delete_selected_items();
+                FenceWindow::delete_selected_for_window(win);
             }
             0
         }
@@ -2615,18 +2793,19 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 }
             }
             DragFinish(drop);
-            let mut b = win.borrow_mut();
-            if let Some(spec) = b.spec() {
-                let dst_dir = Path::new(&spec.folder);
-                let mut added = false;
-                for p in dropped_paths {
-                    if import_external_path_into_fence(&p, dst_dir, false).is_ok() {
-                        added = true;
+            if let Ok(mut b) = win.try_borrow_mut() {
+                if let Some(spec) = b.spec() {
+                    let dst_dir = Path::new(&spec.folder);
+                    let mut added = false;
+                    for p in dropped_paths {
+                        if import_external_path_into_fence(&p, dst_dir, false).is_ok() {
+                            added = true;
+                        }
                     }
-                }
-                if added {
-                    b.reload_entries();
-                    b.paint();
+                    if added {
+                        b.reload_entries();
+                        b.paint();
+                    }
                 }
             }
             0
