@@ -219,8 +219,8 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 c.round([0., 0., 360., 174.], 22., 0x28232d, 255, false, false);
                 c.text(&s.title, [24., 14., 336., 48.], 14., true, 0xf6f3f8, 0);
                 for (label, r) in [
-                    ("Cancel", [24., 118., 173., 154.]),
-                    ("Save", [187., 118., 336., 154.]),
+                    ("Hủy", [24., 118., 173., 154.]),
+                    ("Lưu", [187., 118., 336., 154.]),
                 ] {
                     c.round(r, 16., 0xffffff, 26, false, false);
                     c.text(label, r, 12., true, 0xf6f3f8, 1);

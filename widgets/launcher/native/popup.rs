@@ -159,27 +159,27 @@ impl App {
         };
         match &kind {
             Kind::Add => {
-                title = "Add anything".into();
-                subtitle = "FILES · SHORTCUTS · PLACES".into();
-                push("Browse files & apps...", Action::Files, 0, true, false);
-                push("Browse folder...", Action::Folder, 0, true, false);
-                push("Recycle Bin", Action::System(false), 5, true, false);
+                title = "Thêm mục mới".into();
+                subtitle = "TỆP · LỐI TẮT · HỆ THỐNG".into();
+                push("Chọn tệp & ứng dụng...", Action::Files, 0, true, false);
+                push("Chọn thư mục...", Action::Folder, 0, true, false);
+                push("Thùng rác", Action::System(false), 5, true, false);
                 push("This PC", Action::System(true), 6, true, false);
             }
             Kind::Item(id) => {
                 if let Some(item) = self.dock.items.iter().find(|i| i.id == *id) {
                     title = item.name.clone();
                     subtitle = match item.kind.as_str() {
-                        "aumid" => "MICROSOFT STORE APP",
-                        "folder" => "FOLDER",
-                        "shell" => "WINDOWS LOCATION",
-                        _ => "PINNED ITEM",
+                        "aumid" => "ỨNG DỤNG MICROSOFT STORE",
+                        "folder" => "THƯ MỤC",
+                        "shell" => "VỊ TRÍ HỆ THỐNG",
+                        _ => "MỤC ĐÃ GHIM",
                     }
                     .into();
-                    push("Open", Action::Open(id.clone()), 1, true, false);
+                    push("Mở", Action::Open(id.clone()), 1, true, false);
                     if item.target.eq_ignore_ascii_case("shell:RecycleBinFolder") {
                         push(
-                            "Empty Recycle Bin",
+                            "Dọn sạch Thùng rác",
                             Action::EmptyRecycleBin(id.clone()),
                             5,
                             true,
@@ -187,30 +187,30 @@ impl App {
                         );
                     }
                     if item.catalog {
-                        push("Pin to dock", Action::Pin(id.clone()), 0, true, false);
+                        push("Ghim vào khay", Action::Pin(id.clone()), 0, true, false);
                     }
                     if !item.catalog {
-                        push("Rename", Action::Rename(id.clone()), 2, true, false);
-                        push("Change icon...", Action::Icon(id.clone()), 3, true, false);
+                        push("Đổi tên", Action::Rename(id.clone()), 2, true, false);
+                        push("Đổi biểu tượng...", Action::Icon(id.clone()), 3, true, false);
                         if item.icon.as_deref().is_some_and(|name| name.starts_with("native-custom-")) {
-                            push("Reset icon", Action::ResetIcon(id.clone()), 3, true, false);
+                            push("Đặt lại biểu tượng", Action::ResetIcon(id.clone()), 3, true, false);
                         }
                         push(
-                            "Group with...",
+                            "Nhóm với...",
                             Action::Groups(id.clone()),
                             0,
                             self.dock.items.len() > 1,
                             false,
                         );
                         push(
-                            "Ungroup",
+                            "Tách nhóm",
                             Action::Ungroup(id.clone()),
                             0,
                             item.group.is_some(),
                             false,
                         );
                         push(
-                            "Remove from Lumen",
+                            "Xóa khỏi Lumen",
                             Action::Remove(id.clone()),
                             5,
                             true,
@@ -220,9 +220,9 @@ impl App {
                 }
             }
             Kind::Rename(id) => {
-                title = "Rename".into();
-                subtitle = "NAME IN YOUR DOCK".into();
-                push("Save name", Action::Save(id.clone()), 2, true, false);
+                title = "Đổi tên".into();
+                subtitle = "TÊN TRONG KHAY ỨNG DỤNG".into();
+                push("Lưu tên", Action::Save(id.clone()), 2, true, false);
             }
         }
         let (w, h) = self.dimensions(hwnd);
@@ -451,7 +451,7 @@ impl App {
                     self.scaled_icons.remove(&id);
                     self.tile_cache.remove(&id);
                     self.icon_shadows.remove(&id);
-                    self.status = "Emptied Recycle Bin".into();
+                    self.status = "Đã dọn sạch Thùng rác".into();
                     InvalidateRect(hwnd, null(), 0);
                 }
             }
@@ -491,8 +491,8 @@ impl App {
     }
     unsafe fn change_icon(&mut self, hwnd: HWND, id: &str) {
         let mut buffer = vec![0u16; 32768];
-        let filter = wide("Images and icons\0*.png;*.jpg;*.jpeg;*.bmp;*.ico\0\0");
-        let title = wide("Choose an icon image");
+        let filter = wide("Hình ảnh và biểu tượng\0*.png;*.jpg;*.jpeg;*.bmp;*.ico\0\0");
+        let title = wide("Chọn ảnh biểu tượng");
         let mut dialog: OPENFILENAMEW = zeroed();
         dialog.lStructSize = size_of::<OPENFILENAMEW>() as u32;
         dialog.hwndOwner = hwnd;

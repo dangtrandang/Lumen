@@ -839,16 +839,16 @@ impl App {
             SW_SHOWNORMAL,
         ) as isize;
         self.status = if result <= 32 {
-            format!("Could not open {} (Windows error {result})", item.name)
+            format!("Không thể mở {} (Lỗi Windows {result})", item.name)
         } else {
-            format!("Opened {}", item.name)
+            format!("Đã mở {}", item.name)
         };
         InvalidateRect(hwnd, null(), 0);
     }
     unsafe fn add_files(&mut self, hwnd: HWND) {
         let mut buffer = vec![0u16; 32768];
         let filter = wide(
-            "All files, apps and shortcuts\0*.*\0Applications and shortcuts\0*.exe;*.lnk;*.url\0",
+            "Tất cả tệp, ứng dụng và lối tắt\0*.*\0Ứng dụng và lối tắt\0*.exe;*.lnk;*.url\0",
         );
         let mut dialog: OPENFILENAMEW = zeroed();
         dialog.lStructSize = size_of::<OPENFILENAMEW>() as u32;
@@ -857,7 +857,7 @@ impl App {
         dialog.lpstrFile = buffer.as_mut_ptr();
         dialog.nMaxFile = buffer.len() as u32;
         // Keep the title allocated while the synchronous common dialog is open.
-        let title = wide("Add files, applications or shortcuts");
+        let title = wide("Thêm tệp, ứng dụng hoặc lối tắt");
         dialog.lpstrTitle = title.as_ptr();
         dialog.Flags = OFN_NODEREFERENCELINKS
             | OFN_EXPLORER
@@ -868,7 +868,7 @@ impl App {
         if GetOpenFileNameW(&mut dialog) == 0 {
             let error = CommDlgExtendedError();
             if error != 0 {
-                self.status = format!("File picker failed ({error})");
+                self.status = format!("Lỗi hộp thoại chọn tệp ({error})");
             }
             return;
         }
@@ -894,7 +894,7 @@ impl App {
         for path in paths {
             count += usize::from(self.dock.add(&path));
         }
-        self.status = format!("Added {count} item(s)");
+        self.status = format!("Đã thêm {count} mục");
         self.save();
         InvalidateRect(hwnd, null(), 0);
     }
@@ -911,7 +911,7 @@ impl App {
     unsafe fn add_folder(&mut self, hwnd: HWND) {
         use windows_sys::Win32::System::Com::*;
         let initialized = CoInitializeEx(null(), COINIT_APARTMENTTHREADED as u32) >= 0;
-        let title = wide("Choose any folder to add to the dock");
+        let title = wide("Chọn thư mục bất kỳ để thêm vào khay ứng dụng");
         let mut display = [0u16; 260];
         let mut browse: BROWSEINFOW = zeroed();
         browse.hwndOwner = hwnd;
@@ -925,7 +925,7 @@ impl App {
                 let len = path.iter().position(|c| *c == 0).unwrap_or(path.len());
                 if self.dock.add(&String::from_utf16_lossy(&path[..len])) {
                     self.save();
-                    self.status = "Added folder".into();
+                    self.status = "Đã thêm thư mục".into();
                 }
             }
             CoTaskMemFree(selected as _);
@@ -1656,7 +1656,7 @@ impl App {
             if self.query.trim().is_empty() {
                 let placeholder_x = 58. + edit_placeholder_offset(self.edit, self.dpi);
                 Canvas::new(dc, self.dpi).text_alpha(
-                    "Search app...",
+                    "Tìm ứng dụng...",
                     [
                         placeholder_x,
                         26.,
@@ -2075,7 +2075,7 @@ unsafe extern "system" fn search_proc(
                 FillRect(dc, &rect, app.search_brush);
                 let placeholder_x = edit_placeholder_offset(hwnd, app.dpi);
                 Canvas::new(dc, app.dpi).text_alpha(
-                    "Search app...",
+                    "Tìm ứng dụng...",
                     [
                         placeholder_x,
                         0.,
@@ -2206,7 +2206,7 @@ unsafe extern "system" fn wndproc(
                 app.edit,
                 EM_SETCUEBANNER,
                 1,
-                wide("Search app...").as_ptr() as isize,
+                wide("Tìm ứng dụng...").as_ptr() as isize,
             );
             SendMessageW(app.edit, EM_LIMITTEXT, 256, 0);
             SetWindowSubclass(app.edit, Some(search_proc), 1, hwnd as usize);
@@ -2827,7 +2827,7 @@ unsafe extern "system" fn wndproc(
                 );
             }
             DragFinish(drop);
-            app.status = format!("Added {added} item(s)");
+            app.status = format!("Đã thêm {added} mục");
             app.save();
             InvalidateRect(hwnd, null(), 0);
             0

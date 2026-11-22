@@ -322,7 +322,7 @@ impl State {
     unsafe fn labels(&self, c: &Canvas, r: [f32; 4], size: f32) {
         c.text_medium(
             if self.playback.title.is_empty() {
-                "Your music"
+                "Nhạc của bạn"
             } else {
                 &self.playback.title
             },

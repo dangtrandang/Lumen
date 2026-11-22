@@ -4,26 +4,26 @@ use crate::settings_ui::{Change, Choice, Row, Value};
 pub const MESSAGE: u32 = WM_APP + 104;
 pub fn rows(b: &model::Board) -> Vec<Row> {
     vec![
-        Row::section("Background"),
-        Row::slider(2, "Glass tint", b.tint, 0., 100., "%"),
-        Row::slider(3, "Frost strength", b.frost_strength, 0., 100., "%"),
-        Row::slider(5, "Background opacity", b.opacity, 0., 100., "%"),
+        Row::section("Nền"),
+        Row::slider(2, "Độ phủ màu kính", b.tint, 0., 100., "%"),
+        Row::slider(3, "Độ đục kính mờ", b.frost_strength, 0., 100., "%"),
+        Row::slider(5, "Độ mờ nền", b.opacity, 0., 100., "%"),
         Row::choices(
             6,
-            "Surface palette",
+            "Bảng màu bề mặt",
             &b.palette,
             crate::settings_ui::palette_choices(),
         ),
-        Row::section("Layout"),
+        Row::section("Bố cục"),
         Row::choices(
             7,
-            "Design",
+            "Kiểu thiết kế",
             &b.design,
             vec![
-                Choice::new("lumen", "Pinboard", Some(0x554336)),
-                Choice::new("notebook", "Notebook", Some(0xcfe2eb)),
-                Choice::new("index", "Index", Some(0x2a290f)),
-                Choice::new("honey", "Honey", Some(0x52cafa)),
+                Choice::new("lumen", "Bảng ghim", Some(0x554336)),
+                Choice::new("notebook", "Sổ tay", Some(0xcfe2eb)),
+                Choice::new("index", "Thẻ mục lục", Some(0x2a290f)),
+                Choice::new("honey", "Mật ong", Some(0x52cafa)),
             ],
         ),
     ]
@@ -101,8 +101,8 @@ impl State {
         if self.settings.is_none() {
             match crate::settings_ui::Host::create(
                 self.hwnd,
-                "Notes settings",
-                "Changes here apply only to Sticky Notes.",
+                "Cài đặt Ghi chú",
+                "Các thay đổi tại đây chỉ áp dụng cho Ghi chú.",
                 self.source_glass(),
                 rows(&self.board),
                 MESSAGE,

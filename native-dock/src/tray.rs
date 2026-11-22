@@ -149,7 +149,7 @@ impl Tray {
             self.icon_normal
         };
         self.data.szTip.fill(0);
-        let tip = crate::model::wide(if available { "Update available" } else { "Lumen" });
+        let tip = crate::model::wide(if available { "Có bản cập nhật mới" } else { "Lumen" });
         self.data.szTip[..tip.len().min(127)].copy_from_slice(&tip[..tip.len().min(127)]);
         Shell_NotifyIconW(NIM_MODIFY, &self.data);
     }
@@ -161,9 +161,9 @@ impl Tray {
     pub unsafe fn menu(&self) -> u32 {
         let menu = CreatePopupMenu();
         for (id, label) in [
-            (8, "General Settings / Widget Manager"),
-            (10, "Open Log"),
-            (3, "Quit Lumen"),
+            (8, "Cài đặt chung / Quản lý Widget"),
+            (10, "Mở tệp nhật ký (Log)"),
+            (3, "Thoát Lumen"),
         ] {
             AppendMenuW(menu, MF_STRING, id, crate::model::wide(label).as_ptr());
         }

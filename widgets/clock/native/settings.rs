@@ -26,7 +26,7 @@ impl State {
     fn palette_choices(&self) -> Vec<Choice> {
         let mut choices = vec![Choice::new(
             "theme",
-            "Theme material",
+            "Theo giao diện",
             Some(face::color(&self.config.theme)),
         )];
         choices.extend(crate::settings_ui::palette_choices());
@@ -40,20 +40,20 @@ impl State {
     pub(super) fn settings_rows(&self) -> Vec<Row> {
         let c = &self.config;
         let mut rows = vec![
-            Row::section("Background"),
-            Row::slider(TINT, "Glass tint", c.tint, 0., 100., "%"),
-            Row::slider(STRENGTH, "Frost strength", c.frost_strength, 0., 100., "%"),
-            Row::slider(OPACITY, "Background opacity", c.opacity, 0., 100., "%"),
+            Row::section("Nền"),
+            Row::slider(TINT, "Độ phủ màu kính", c.tint, 0., 100., "%"),
+            Row::slider(STRENGTH, "Độ đục kính mờ", c.frost_strength, 0., 100., "%"),
+            Row::slider(OPACITY, "Độ mờ nền", c.opacity, 0., 100., "%"),
             Row::choices(
                 PALETTE,
-                "Surface palette",
+                "Bảng màu bề mặt",
                 &c.palette,
                 self.palette_choices(),
             ),
-            Row::section("Clock face"),
+            Row::section("Mặt đồng hồ"),
             Row::choices(
                 THEME,
-                "Theme",
+                "Giao diện",
                 &c.theme,
                 THEMES
                     .iter()
@@ -62,37 +62,37 @@ impl State {
             ),
             Row::toggle(
                 HOUR12,
-                "12-hour time",
-                "Show AM or PM alongside the time",
+                "Định dạng 12 giờ",
+                "Hiển thị AM hoặc PM bên cạnh giờ",
                 c.hour12,
             ),
             Row::toggle(
                 SECONDS,
-                "Show seconds",
-                "Update seconds and the companion dial",
+                "Hiển thị giây",
+                "Cập nhật kim giây và bộ đếm giây",
                 c.show_seconds,
             ),
-            Row::section("Window"),
+            Row::section("Cửa sổ"),
         ];
         if c.theme == "sunset" {
             let at = rows.len() - 2;
             rows.splice(
                 at..at,
                 [
-                    Row::section("Afterglow motion"),
+                    Row::section("Hiệu ứng Hoàng hôn"),
                     Row::toggle(
                         MOTION,
-                        "Dynamic animation",
-                        "Gentle sun rays, stars and a sun-to-moon transition",
+                        "Chuyển động sinh động",
+                        "Tia nắng nhẹ, bầu trời sao và chuyển cảnh mặt trời - mặt trăng",
                         c.dynamic_animation,
                     ),
                     Row::choices(
                         ANIMATION_MODE,
-                        "Sun and moon",
+                        "Mặt trời và mặt trăng",
                         &c.animation_mode,
                         vec![
-                            Choice::new("clock", "Follow clock time", None),
-                            Choice::new("loop", "Decorative loop", None),
+                            Choice::new("clock", "Theo giờ thực tế", None),
+                            Choice::new("loop", "Vòng lặp trang trí", None),
                         ],
                     ),
                 ],
@@ -104,8 +104,8 @@ impl State {
         if self.settings.is_none() {
             match crate::settings_ui::Host::create(
                 self.hwnd,
-                "Clock settings",
-                "Changes here apply only to Clock.",
+                "Cài đặt Đồng hồ",
+                "Các thay đổi tại đây chỉ áp dụng cho Đồng hồ.",
                 self.glass.clone(),
                 self.settings_rows(),
                 SETTINGS_CHANGED,

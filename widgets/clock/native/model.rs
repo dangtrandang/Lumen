@@ -15,13 +15,13 @@ pub const MAX_SIZE: i32 = 1100;
 
 pub const THEMES: [(&str, &str); 9] = [
     ("lumen", "Lumen"),
-    ("sunset", "Afterglow"),
-    ("paper", "Paper"),
-    ("neon", "Nightfall"),
-    ("modular", "Colour block"),
-    ("ocean", "Split flap"),
-    ("rose", "Daybook"),
-    ("aurora", "Timeline"),
+    ("sunset", "Hoàng hôn"),
+    ("paper", "Giấy"),
+    ("neon", "Đêm tối"),
+    ("modular", "Khối màu"),
+    ("ocean", "Lật số"),
+    ("rose", "Nhật ký"),
+    ("aurora", "Dòng thời gian"),
     ("terminal", "Terminal"),
 ];
 pub const ZONES: [(&str, &str); 10] = [
@@ -282,26 +282,26 @@ pub fn digital(t: &SYSTEMTIME, twelve: bool) -> String {
     format!("{:02}:{:02}", hour(t.wHour, twelve), t.wMinute)
 }
 pub fn date(t: &SYSTEMTIME) -> String {
-    const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const DAYS: [&str; 7] = ["CN", "Th 2", "Th 3", "Th 4", "Th 5", "Th 6", "Th 7"];
     const MONTHS: [&str; 12] = [
-        "January",
-        "February",
-        "March",
-        "April",
-        "May",
-        "June",
-        "July",
-        "August",
-        "September",
-        "October",
-        "November",
-        "December",
+        "Thg 1",
+        "Thg 2",
+        "Thg 3",
+        "Thg 4",
+        "Thg 5",
+        "Thg 6",
+        "Thg 7",
+        "Thg 8",
+        "Thg 9",
+        "Thg 10",
+        "Thg 11",
+        "Thg 12",
     ];
     format!(
         "{}, {} {}, {}",
         DAYS[t.wDayOfWeek as usize % 7],
-        MONTHS[t.wMonth.saturating_sub(1) as usize % 12],
         t.wDay,
+        MONTHS[t.wMonth.saturating_sub(1) as usize % 12],
         t.wYear
     )
 }

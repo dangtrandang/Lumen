@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
   "id": "fences",
-  "name": "Desktop Fences",
-  "description": "Liquid glass desktop folder fences with fade on hover.",
+  "name": "Khung Thư Mục (Fences)",
+  "description": "Khung thư mục kính mờ trên màn hình nền, tự phân loại tệp và ẩn/hiện khi rê chuột.",
   "icon": "launcher",
   "accent": "#7c9cff",
   "order": 5,
   "runtime": "native",
-  "hasSettings": false,
+  "hasSettings": true,
   "surface": "desktop",
   "nativeEntry": "native/mod.rs"
 }

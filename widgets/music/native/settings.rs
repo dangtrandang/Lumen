@@ -9,24 +9,24 @@ impl State {
     }
     pub(super) fn settings_rows(&self) -> Vec<Row> {
         vec![
-            Row::section("Account"),
-            Row::accent_button(204, if self.playback.signed_in { "Sign out of YouTube Music" } else { "Sign in to YouTube Music" }, 0x0000ff),
-            Row::note(if self.playback.signed_in { "Sign out clears the session only in Music's dedicated browser profile." } else { "Sign in in the browser, close it, then press Play to reconnect." }),
-            Row::section("Background"),
-            Row::slider(102, "Glass tint", self.config.tint, 0., 100., "%"),
-            Row::slider(103, "Frost strength", self.config.frost_strength, 0., 100., "%"),
-            Row::slider(105, "Background opacity", self.config.opacity, 0., 100., "%"),
-            Row::choices(106, "Surface palette", &self.config.palette, crate::settings_ui::palette_choices()),
-            Row::section("Layout"),
-            Row::choices(201, "Music design", &self.config.design, vec![
+            Row::section("Tài khoản"),
+            Row::accent_button(204, if self.playback.signed_in { "Đăng xuất khỏi YouTube Music" } else { "Đăng nhập YouTube Music" }, 0x0000ff),
+            Row::note(if self.playback.signed_in { "Đăng xuất sẽ xóa phiên trong hồ sơ trình duyệt riêng của widget Nhạc." } else { "Đăng nhập trên trình duyệt, đóng cửa sổ đó rồi bấm Phát để kết nối lại." }),
+            Row::section("Nền"),
+            Row::slider(102, "Độ phủ màu kính", self.config.tint, 0., 100., "%"),
+            Row::slider(103, "Độ đục kính mờ", self.config.frost_strength, 0., 100., "%"),
+            Row::slider(105, "Độ mờ nền", self.config.opacity, 0., 100., "%"),
+            Row::choices(106, "Bảng màu bề mặt", &self.config.palette, crate::settings_ui::palette_choices()),
+            Row::section("Bố cục"),
+            Row::choices(201, "Kiểu giao diện", &self.config.design, vec![
                 Choice::new("coverflow", "Coverflow", None),
-                Choice::new("compact", "Compact", None),
-                Choice::new("turntable", "Turntable", None),
-                Choice::new("orbit", "Orbit", None),
-                Choice::new("disc", "Disc", None),
+                Choice::new("compact", "Thu gọn", None),
+                Choice::new("turntable", "Đầu đĩa than", None),
+                Choice::new("orbit", "Quỹ đạo", None),
+                Choice::new("disc", "Đĩa xoay", None),
             ]),
 
-            Row::note("Themes scale down in place before switching to the pocket player. Minimum size: 168 × 104 DIP. Playback follows the web player."),
+            Row::note("Giao diện tự co giãn theo kích thước cửa sổ. Kích thước tối thiểu: 168 × 104 DIP."),
         ]
     }
     pub(super) unsafe fn ensure_settings(&mut self) -> bool {
@@ -34,8 +34,8 @@ impl State {
         if self.settings.is_none() {
             match SettingsHost::create(
                 self.hwnd,
-                "Music settings",
-                "Changes here apply only to Music.",
+                "Cài đặt Nhạc",
+                "Các thay đổi tại đây chỉ áp dụng cho YouTube Music.",
                 self.glass.clone(),
                 rows,
                 NOTIFY,

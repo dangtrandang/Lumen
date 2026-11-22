@@ -138,8 +138,8 @@ impl Host {
         let config = Config::load(root)?;
         let ui = settings_ui::Host::create(
             owner,
-            "Lumen Settings",
-            "Your widgets, your desktop.",
+            "Cài đặt Lumen",
+            "Tiện ích của bạn, màn hình của bạn.",
             glass,
             vec![],
             ACTION_MESSAGE,
@@ -162,7 +162,7 @@ impl Host {
         Ok(host)
     }
     fn rows(&self) -> Vec<Row> {
-        let mut rows = vec![Row::section("Widgets")];
+        let mut rows = vec![Row::section("Tiện ích (Widgets)")];
         for (i, widget) in self.packages.iter().enumerate() {
             rows.push(Row::Widget {
                 id: 1000 + i as u32 * 3,
@@ -186,55 +186,55 @@ impl Host {
             });
         }
         rows.extend([
-            Row::section("General"),
+            Row::section("Cài đặt chung"),
             Row::toggle(
                 6,
-                "Start with Windows",
-                "Open Lumen automatically when you sign in",
+                "Khởi động cùng Windows",
+                "Tự động mở Lumen khi bạn đăng nhập vào máy",
                 self.config.start_with_windows,
             ),
             Row::toggle(
                 15,
-                "Fast startup (no OS delay)",
-                "Use Task Scheduler (Admin) to launch immediately at logon; restarts app",
+                "Khởi động nhanh (không trễ hệ thống)",
+                "Dùng Task Scheduler (Admin) để chạy ngay khi đăng nhập; sẽ khởi động lại ứng dụng",
                 self.config.fast_startup,
             ),
             Row::toggle(
                 3,
-                "Snap & fuse widgets",
-                "Join nearby widgets; drag apart to separate",
+                "Hít & ghép nối widget",
+                "Tự ghép các widget đặt gần nhau; kéo ra để tách rời",
                 crate::fusion::enabled(),
             ),
             Row::toggle(
                 12,
-                "Low-power mode",
-                "Reduce animation rate and blur effects for lower-spec PCs",
+                "Chế độ tiết kiệm năng lượng",
+                "Giảm tần số hiệu ứng chuyển động và độ mờ cho máy cấu hình thấp",
                 self.config.low_power,
             ),
             Row::toggle(
                 13,
-                "Liquid glass",
-                "Subtle edge refraction and chromatic shift on glass surfaces",
+                "Kính lỏng (Liquid Glass)",
+                "Hiệu ứng khúc xạ viền và chuyển sắc tinh tế trên bề mặt kính",
                 self.config.liquid_glass,
             ),
             Row::toggle(
                 16,
-                "Frosted glass",
-                "Blend widget backgrounds with the desktop wallpaper",
+                "Kính mờ (Frosted Glass)",
+                "Hòa trộn nền của widget với hình nền máy tính",
                 self.config.frosted_glass,
             ),
-            Row::slider(17, "Blur size", self.config.blur, 0., 80., "px"),
+            Row::slider(17, "Độ nhòe kính (Blur)", self.config.blur, 0., 80., "px"),
         ]);
         if !self.error.is_empty() {
             rows.push(Row::note(&self.error));
         }
         rows.extend([
-            Row::section("About Lumen"),
+            Row::section("Giới thiệu Lumen"),
             Row::note(format!(
-                "Lumen {} · By Nhat Ng · MIT License",
+                "Lumen {} · Tác giả Nhat Ng · Giấy phép MIT",
                 crate::update::installed_version(&self.root)
             )),
-            Row::button(11, "Credits & licenses"),
+            Row::button(11, "Thông tin & Giấy phép mã nguồn mở"),
         ]);
         rows
     }

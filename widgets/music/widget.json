@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "music",
   "name": "YouTube Music",
-  "description": "Your music player and library.",
+  "description": "Trình phát nhạc và thư viện của bạn.",
   "icon": "music",
   "accent": "#ff375f",
   "order": 10,

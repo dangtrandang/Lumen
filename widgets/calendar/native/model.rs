@@ -7,19 +7,153 @@ pub const THEMES: [&str; 9] = [
     "lumen", "almanac", "blocks", "pop", "prism", "grove", "mist", "agenda", "soft",
 ];
 pub const MONTHS: [&str; 12] = [
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
+    "Tháng 1",
+    "Tháng 2",
+    "Tháng 3",
+    "Tháng 4",
+    "Tháng 5",
+    "Tháng 6",
+    "Tháng 7",
+    "Tháng 8",
+    "Tháng 9",
+    "Tháng 10",
+    "Tháng 11",
+    "Tháng 12",
 ];
+pub const MONTHS_SHORT: [&str; 12] = [
+    "Th1", "Th2", "Th3", "Th4", "Th5", "Th6", "Th7", "Th8", "Th9", "Th10", "Th11", "Th12",
+];
+pub const WEEKDAYS: [&str; 7] = [
+    "Chủ Nhật",
+    "Thứ Hai",
+    "Thứ Ba",
+    "Thứ Tư",
+    "Thứ Năm",
+    "Thứ Sáu",
+    "Thứ Bảy",
+];
+pub const WEEKDAYS_SHORT: [&str; 7] = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
+
+const CAN: [&str; 10] = [
+    "Giáp", "Ất", "Bính", "Đinh", "Mậu", "Kỷ", "Canh", "Tân", "Nhâm", "Quý",
+];
+const CHI: [&str; 12] = [
+    "Tý", "Sửu", "Dần", "Mão", "Thìn", "Tỵ", "Ngọ", "Mùi", "Thân", "Dậu", "Tuất", "Hợi",
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LunarDate {
+    pub day: i32,
+    pub month: i32,
+    pub year: i32,
+    pub leap: bool,
+}
+
+impl LunarDate {
+    pub fn is_special(self) -> bool {
+        self.day == 1 || self.day == 15
+    }
+    pub fn short_label(self) -> String {
+        if self.day == 1 {
+            format!("1/{}{}", self.month, if self.leap { "+" } else { "" })
+        } else {
+            self.day.to_string()
+        }
+    }
+    pub fn can_chi_year(self) -> String {
+        let can = CAN[(self.year + 6).rem_euclid(10) as usize];
+        let chi = CHI[(self.year + 8).rem_euclid(12) as usize];
+        format!("{can} {chi}")
+    }
+    pub fn full_label(self) -> String {
+        format!(
+            "ÂL {:02}/{:02}{} · {}",
+            self.day,
+            self.month,
+            if self.leap { "N" } else { "" },
+            self.can_chi_year()
+        )
+    }
+}
+
+fn jd_from_date(dd: i32, mm: i32, yy: i32) -> i32 {
+    let a = (14 - mm) / 12;
+    let y = yy + 4800 - a;
+    let m = mm + 12 * a - 3;
+    let mut jd = dd + (153 * m + 2) / 5 + 365 * y + y / 4 - y / 100 + y / 400 - 32045;
+    if jd < 2299161 {
+        jd = dd + (153 * m + 2) / 5 + 365 * y + y / 4 - 32083;
+    }
+    jd
+}
+
+fn new_moon_day(k: i32, time_zone: f64) -> i32 {
+    let t = k as f64 / 1236.85;
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let dr = std::f64::consts::PI / 180.0;
+    let mut jd1 = 2415020.75933 + 29.53058868 * (k as f64) + 0.0001178 * t2 - 0.000000155 * t3;
+    jd1 += 0.00033 * ((166.56 + 132.87 * t - 0.009173 * t2) * dr).sin();
+    let m = 359.2242 + 29.10535608 * (k as f64) - 0.0000333 * t2 - 0.00000347 * t3;
+    let mpr = 306.0253 + 385.81691806 * (k as f64) + 0.0107306 * t2 + 0.00001236 * t3;
+    let f = 21.2964 + 390.67050646 * (k as f64) - 0.0016528 * t2 - 0.00000239 * t3;
+    let mut c1 = (0.1734 - 0.000393 * t) * (m * dr).sin() + 0.0021 * (2.0 * dr * m).sin();
+    c1 = c1 - 0.4068 * (mpr * dr).sin() + 0.0161 * (dr * 2.0 * mpr).sin();
+    c1 -= 0.0004 * (dr * 3.0 * mpr).sin();
+    c1 = c1 + 0.0104 * (dr * 2.0 * f).sin() - 0.0051 * (dr * (m + mpr)).sin();
+    c1 = c1 - 0.0074 * (dr * (m - mpr)).sin() + 0.0004 * (dr * (2.0 * f + m)).sin();
+    c1 = c1 - 0.0004 * (dr * (2.0 * f - m)).sin() - 0.0006 * (dr * (2.0 * f + mpr)).sin();
+    c1 += 0.0010 * (dr * (2.0 * f - mpr)).sin() + 0.0005 * (dr * (2.0 * mpr + m)).sin();
+    let deltat = if t < -11.0 {
+        0.001 + 0.000839 * t + 0.0002261 * t2 - 0.00000845 * t3 - 0.000000081 * t * t3
+    } else {
+        -0.000278 + 0.000265 * t + 0.000262 * t2
+    };
+    let jd_new = jd1 + c1 - deltat;
+    (jd_new + 0.5 + time_zone / 24.0).floor() as i32
+}
+
+fn sun_longitude_sector(jdn: i32, time_zone: f64) -> i32 {
+    let jdn_f = jdn as f64 - 0.5 - time_zone / 24.0;
+    let t = (jdn_f - 2451545.0) / 36525.0;
+    let t2 = t * t;
+    let dr = std::f64::consts::PI / 180.0;
+    let m = 357.52910 + 35999.05030 * t - 0.0001559 * t2 - 0.00000048 * t * t2;
+    let l0 = 280.46645 + 36000.76983 * t + 0.0003032 * t2;
+    let mut dl = (1.914600 - 0.004817 * t - 0.000014 * t2) * (dr * m).sin();
+    dl += (0.019993 - 0.000101 * t) * (dr * 2.0 * m).sin() + 0.000290 * (dr * 3.0 * m).sin();
+    let mut l = l0 + dl;
+    l *= dr;
+    l -= std::f64::consts::TAU * (l / std::f64::consts::TAU).floor();
+    (l / std::f64::consts::PI * 6.0).floor() as i32
+}
+
+fn lunar_month_11(yy: i32, time_zone: f64) -> i32 {
+    let off = jd_from_date(31, 12, yy) - 2415021;
+    let k = (off as f64 / 29.530588853).floor() as i32;
+    let mut nm = new_moon_day(k, time_zone);
+    let sun_long = sun_longitude_sector(nm, time_zone);
+    if sun_long >= 9 {
+        nm = new_moon_day(k - 1, time_zone);
+    }
+    nm
+}
+
+fn leap_month_offset(a11: i32, time_zone: f64) -> i32 {
+    let k = ((a11 as f64 - 2415021.076998695) / 29.530588853 + 0.5).floor() as i32;
+    let mut last;
+    let mut i = 1;
+    let mut arc = sun_longitude_sector(new_moon_day(k + i, time_zone), time_zone);
+    loop {
+        last = arc;
+        i += 1;
+        arc = sun_longitude_sector(new_moon_day(k + i, time_zone), time_zone);
+        if arc == last || i >= 14 {
+            break;
+        }
+    }
+    i - 1
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Date {
@@ -90,6 +224,53 @@ impl Date {
         let offset = (self.weekday() + if monday { 6 } else { 0 }) % 7;
         std::array::from_fn(|i| self.add_days(i as i32 - offset as i32))
     }
+    pub fn lunar(self) -> LunarDate {
+        let tz = 7.0;
+        let day_number = jd_from_date(self.day, self.month, self.year);
+        let k = ((day_number as f64 - 2415021.076998695) / 29.530588853).floor() as i32;
+        let mut month_start = new_moon_day(k + 1, tz);
+        if month_start > day_number {
+            month_start = new_moon_day(k, tz);
+        }
+        let mut a11 = lunar_month_11(self.year, tz);
+        let mut b11 = a11;
+        let mut lunar_year = if a11 >= month_start {
+            a11 = lunar_month_11(self.year - 1, tz);
+            self.year
+        } else {
+            b11 = lunar_month_11(self.year + 1, tz);
+            self.year + 1
+        };
+        let lunar_day = day_number - month_start + 1;
+        let diff = ((month_start - a11) as f64 / 29.0).floor() as i32;
+        let mut lunar_leap = false;
+        let mut lunar_month = diff + 11;
+        if b11 - a11 > 365 {
+            let leap_month_diff = leap_month_offset(a11, tz);
+            if diff >= leap_month_diff {
+                lunar_month = diff + 10;
+                if diff == leap_month_diff {
+                    lunar_leap = true;
+                }
+            }
+        }
+        if lunar_month > 12 {
+            lunar_month -= 12;
+        }
+        if lunar_month >= 11 && diff < 4 {
+            lunar_year -= 1;
+        }
+        LunarDate {
+            day: lunar_day,
+            month: lunar_month,
+            year: lunar_year,
+            leap: lunar_leap,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -98,6 +279,8 @@ pub struct Config {
     pub version: u32,
     pub theme: String,
     pub week_starts_on: u8,
+    #[serde(default = "default_true")]
+    pub show_lunar: bool,
     pub open: bool,
     pub floating: bool,
     pub frosted: bool,
@@ -117,6 +300,7 @@ impl Default for Config {
             version: 1,
             theme: "lumen".into(),
             week_starts_on: 1,
+            show_lunar: true,
             open: true,
             floating: false,
             frosted: true,
@@ -468,5 +652,42 @@ mod tests {
             assert_eq!(fs::read_to_string(&file).unwrap(), value);
         }
         fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn vietnamese_lunar_calendar_computes_accurate_dates_and_can_chi() {
+        let tet_2026 = Date {
+            year: 2026,
+            month: 2,
+            day: 17,
+        }
+        .lunar();
+        assert_eq!(
+            tet_2026,
+            LunarDate {
+                day: 1,
+                month: 1,
+                year: 2026,
+                leap: false
+            }
+        );
+        assert_eq!(tet_2026.can_chi_year(), "Bính Ngọ");
+        assert_eq!(tet_2026.short_label(), "1/1");
+
+        let nov_2026 = Date {
+            year: 2026,
+            month: 11,
+            day: 22,
+        }
+        .lunar();
+        assert_eq!(
+            nov_2026,
+            LunarDate {
+                day: 14,
+                month: 10,
+                year: 2026,
+                leap: false
+            }
+        );
+        assert_eq!(nov_2026.short_label(), "14");
     }
 }

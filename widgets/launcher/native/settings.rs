@@ -131,7 +131,7 @@ impl App {
         let hwnd = CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TOOLWINDOW,
             class.as_ptr(),
-            wide("App Dock settings").as_ptr(),
+            wide("Cài đặt App Dock").as_ptr(),
             WS_POPUP,
             x,
             y,
@@ -143,7 +143,7 @@ impl App {
             pointer as _,
         );
         if hwnd.is_null() {
-            self.status = "Could not open App Dock settings".into();
+            self.status = "Không thể mở cài đặt App Dock".into();
             return;
         }
         self.settings.hwnd = hwnd;
@@ -255,7 +255,7 @@ impl App {
             c.round([17., 16., 45., 44.], 14., white, 24, true, false);
             c.line(&[(33., 23.), (27., 30.), (33., 37.)], white, 200, 1.3);
             c.text(
-                "App Dock settings",
+                "Cài đặt App Dock",
                 [54., 14., w as f32 - 58., 46.],
                 13.,
                 true,
@@ -373,7 +373,7 @@ impl App {
             );
         };
         tx(
-            "Changes here apply only to App Dock.",
+            "Các thay đổi tại đây chỉ áp dụng cho App Dock.",
             [24, 62, w - 24, 87],
             11.,
             false,
@@ -381,7 +381,7 @@ impl App {
             0,
         );
         tx(
-            "B A C K G R O U N D",
+            "N Ề N",
             [25, 94, w - 25, 109],
             9.,
             true,
@@ -392,9 +392,9 @@ impl App {
         round([16, 112, w - 16, 368 + extra], 16., 10, false);
         round([16, 112, w - 16, 368 + extra], 16., 35, true);
         for (label, value, max, y, action, suffix) in [
-            ("Glass tint", self.dock.tint, 100., 115, Action::Tint, "%"),
+            ("Độ phủ màu kính", self.dock.tint, 100., 115, Action::Tint, "%"),
             (
-                "Frost strength",
+                "Độ đục kính mờ",
                 self.dock.frost_strength,
                 100.,
                 170,
@@ -402,7 +402,7 @@ impl App {
                 "%",
             ),
             (
-                "Background opacity",
+                "Độ mờ nền",
                 self.dock.opacity,
                 100.,
                 225,
@@ -471,7 +471,7 @@ impl App {
             hit([22, y + 25, w - 60, y + 52], action);
         }
         tx(
-            "Background opacity lets desktop windows show through.",
+            "Độ mờ nền giúp nhìn xuyên qua xuống màn hình nền.",
             [32, 288, w - 30, 305],
             9.,
             false,
@@ -479,7 +479,7 @@ impl App {
             0,
         );
         tx(
-            "Search, groups, icons and labels keep their own opacity.",
+            "Thanh tìm kiếm, nhóm, biểu tượng và nhãn vẫn giữ độ rõ nét.",
             [32, 303, w - 30, 320],
             9.,
             false,
@@ -489,9 +489,9 @@ impl App {
         line(331);
         tx(
             if self.settings.expanded {
-                "⌄ Surface palette"
+                "⌄ Bảng màu bề mặt"
             } else {
-                "› Surface palette"
+                "› Bảng màu bề mặt"
             },
             [30, 337, w - 30, 364],
             12.,
@@ -560,7 +560,7 @@ impl App {
         }
         let start = 400 + extra;
         tx(
-            "A P P  L A Y O U T",
+            "B Ố  C Ụ C  Ứ N G  D Ụ N G",
             [25, start - 20, w - 25, start - 4],
             9.,
             true,
@@ -570,7 +570,7 @@ impl App {
         round([16, start, w - 16, start + 260], 16., 10, false);
         round([16, start, w - 16, start + 260], 16., 35, true);
         tx(
-            "Columns",
+            "Số cột",
             [28, start + 3, w - 140, start + 26],
             11.5,
             false,
@@ -578,7 +578,7 @@ impl App {
             0,
         );
         tx(
-            "Used by the Lumen grid",
+            "Dùng cho lưới biểu tượng Lumen",
             [28, start + 23, w - 140, start + 38],
             9.5,
             false,
@@ -615,7 +615,7 @@ impl App {
         hit([w - 58, start, w - 22, start + 40], Action::More);
         line(start + 42);
         tx(
-            "Icon size",
+            "Kích thước biểu tượng",
             [28, start + 48, w - 80, start + 70],
             11.5,
             false,
@@ -681,15 +681,15 @@ impl App {
         hit([22, start + 68, w - 60, start + 99], Action::Icon);
         line(start + 100);
         for (label, on, y, action) in [
-            ("Sync Desktop items", self.dock.sync_desktop, start + 180, Action::Desktop),
+            ("Đồng bộ mục trên Desktop", self.dock.sync_desktop, start + 180, Action::Desktop),
             (
-                "Show labels",
+                "Hiện nhãn tên",
                 self.dock.show_labels,
                 start + 100,
                 Action::Labels,
             ),
             (
-                "Show search",
+                "Hiện thanh tìm kiếm",
                 self.dock.show_search,
                 start + 140,
                 Action::Search,
@@ -702,7 +702,7 @@ impl App {
         }
         let footer_y = start + 236;
         tx(
-            "Lumen · Native dock",
+            "Lumen · Khay ứng dụng",
             [27, footer_y, w - 110, footer_y + 27],
             10.,
             false,
@@ -710,7 +710,7 @@ impl App {
             0,
         );
         tx(
-            "Quit",
+            "Thoát",
             [w - 75, footer_y, w - 27, footer_y + 27],
             11.,
             false,

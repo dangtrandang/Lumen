@@ -555,35 +555,35 @@ impl State {
     fn settings_rows(&self) -> Vec<Row> {
         let c = &self.config;
         vec![
-            Row::section("Design"),
+            Row::section("Giao diện"),
             Row::choices(
                 7,
-                "Theme",
+                "Chủ đề",
                 &c.design,
                 [
                     ("lumen", "Lumen"),
-                    ("cloud", "Vibrant"),
-                    ("soft-violet", "Soft Violet"),
-                    ("liquid-pastel", "Liquid Pastel"),
-                    ("compact", "Compact"),
+                    ("cloud", "Sống động"),
+                    ("soft-violet", "Tím dịu"),
+                    ("liquid-pastel", "Pastel lỏng"),
+                    ("compact", "Nhỏ gọn"),
                 ]
                 .into_iter()
                 .map(|(k, v)| Choice::new(k, v, None))
                 .collect(),
             ),
-            Row::section("Background"),
-            Row::slider(2, "Glass tint", c.tint, 0., 100., "%"),
-            Row::slider(3, "Frost strength", c.frost_strength, 0., 100., "%"),
-            Row::slider(5, "Background opacity", c.opacity, 0., 100., "%"),
+            Row::section("Nền"),
+            Row::slider(2, "Độ phủ màu kính", c.tint, 0., 100., "%"),
+            Row::slider(3, "Độ đục kính mờ", c.frost_strength, 0., 100., "%"),
+            Row::slider(5, "Độ mờ nền", c.opacity, 0., 100., "%"),
             Row::choices(
                 6,
-                "Surface palette",
+                "Bảng màu bề mặt",
                 &c.palette,
                 settings_ui::palette_choices(),
             ),
-            Row::section("Window"),
-            Row::button(9, "Edit controls"),
-            Row::note("All controls run natively. Changes apply only on release."),
+            Row::section("Cửa sổ"),
+            Row::button(9, "Chỉnh sửa điều khiển"),
+            Row::note("Tất cả điều khiển chạy trực tiếp trên hệ thống."),
         ]
     }
     unsafe fn open_settings(&mut self) {
@@ -591,8 +591,8 @@ impl State {
         if self.settings.is_none() {
             match settings_ui::Host::create(
                 self.hwnd,
-                "Control Center settings",
-                "Appearance and window preferences.",
+                "Cài đặt Trung tâm điều khiển",
+                "Tùy chỉnh giao diện và bảng điều khiển.",
                 self.glass.clone(),
                 rows.clone(),
                 SETTINGS,
@@ -619,27 +619,27 @@ impl State {
         }
     }
     fn editor_rows(&self) -> Vec<Row> {
-        let mut rows = vec![Row::section("Your controls")];
+        let mut rows = vec![Row::section("Điều khiển của bạn")];
         for (i, c) in self.config.controls.iter().enumerate() {
             rows.push(Row::choices(
                 2000 + i as u32,
                 &c.label,
                 "",
                 [
-                    ("up", "Move up"),
-                    ("down", "Move down"),
-                    ("rename", "Rename"),
-                    ("remove", "Remove"),
+                    ("up", "Lên trên"),
+                    ("down", "Xuống dưới"),
+                    ("rename", "Đổi tên"),
+                    ("remove", "Xóa"),
                 ]
                 .into_iter()
                 .map(|(k, l)| Choice::new(k, l, None))
                 .collect(),
             ));
         }
-        rows.push(Row::section("Add"));
-        rows.push(Row::button(1, "Add control…"));
+        rows.push(Row::section("Thêm"));
+        rows.push(Row::button(1, "Thêm điều khiển…"));
         rows.push(Row::note(
-            "Choose any display, audio output or microphone. Volume follows the default device.",
+            "Chọn màn hình, đầu ra âm thanh hoặc microphone. Âm lượng sẽ theo thiết bị mặc định.",
         ));
         rows
     }
@@ -733,7 +733,7 @@ impl State {
                     kind,
                     String::new(),
                     if kind == Kind::Display {
-                        "Displays".into()
+                        "Màn hình".into()
                     } else {
                         kind.name().into()
                     },
@@ -765,27 +765,27 @@ impl State {
             self.catalog()
         };
         let mut rows = vec![Row::section(if self.adding {
-            "Available controls"
+            "Điều khiển khả dụng"
         } else {
-            "Choose device"
+            "Chọn thiết bị"
         })];
         for (i, c) in self.candidates.iter().enumerate() {
             rows.push(Row::button(1000 + i as u32, &c.label));
         }
         if self.candidates.is_empty() {
             rows.push(Row::note(
-                "No connected devices found. Refresh after connecting a device.",
+                "Không tìm thấy thiết bị đã kết nối. Hãy làm mới sau khi cắm thiết bị.",
             ));
         }
         self.chooser.take();
         match settings_ui::Host::create(
             self.hwnd,
             if self.adding {
-                "Add control"
+                "Thêm điều khiển"
             } else {
-                "Choose audio device"
+                "Chọn thiết bị âm thanh"
             },
-            "Select an item below.",
+            "Chọn một mục bên dưới.",
             self.glass.clone(),
             rows,
             CHOOSE,
@@ -895,7 +895,7 @@ impl State {
                         if available {
                             self.command(c, if on { 0. } else { 1. });
                         } else {
-                            self.error = "This device or feature is unavailable".into();
+                            self.error = "Thiết bị hoặc tính năng này hiện không khả dụng".into();
                         }
                     }
                 }
@@ -969,9 +969,9 @@ impl State {
                 if c.kind.is_group() {
                     let devices = self.control_devices(c);
                     let title = match c.kind {
-                        Kind::Audio => "Audio",
-                        Kind::Microphone => "Mic",
-                        Kind::Display => "Display",
+                        Kind::Audio => "Âm thanh",
+                        Kind::Microphone => "Micro",
+                        Kind::Display => "Màn hình",
                         _ => &c.label,
                     };
                     if devices.is_empty() {
@@ -980,7 +980,7 @@ impl State {
                             device_index: None,
                             kind: c.kind,
                             title: title.into(),
-                            subtitle: "No devices".into(),
+                            subtitle: "Không có thiết bị".into(),
                             on: false,
                             available: false,
                             rect: [0.; 4],
@@ -988,7 +988,7 @@ impl State {
                     } else {
                         for (di, (_, dev_name, d_on, d_enabled)) in devices.into_iter().enumerate() {
                             let subtitle = if c.kind == Kind::Display {
-                                dev_name.trim_end_matches(" · Main Display").to_string()
+                                dev_name.trim_end_matches(" · Màn hình chính").to_string()
                             } else {
                                 dev_name
                             };
@@ -1227,7 +1227,7 @@ impl State {
                     (
                         d.id.clone(),
                         if d.primary {
-                            format!("{} · Main Display", d.name)
+                            format!("{} · Màn hình chính", d.name)
                         } else {
                             d.name.clone()
                         },
@@ -1250,7 +1250,7 @@ impl State {
     fn info(&self, c: &Control) -> (bool, String, bool) {
         let s = &self.snapshot;
         match c.kind {
-            Kind::Source => (false, "DDC/CI input selection".into(), true),
+            Kind::Source => (false, "Chọn nguồn vào DDC/CI".into(), true),
             Kind::Volume | Kind::MicVolume => {
                 let value = if c.kind.is_input() {
                     s.mic_volume
@@ -1261,7 +1261,7 @@ impl State {
                     false,
                     value
                         .map(|v| format!("{}%", v.round()))
-                        .unwrap_or_else(|| "Unavailable".into()),
+                        .unwrap_or_else(|| "Không khả dụng".into()),
                     value.is_some(),
                 )
             }
@@ -1281,7 +1281,7 @@ impl State {
                 (
                     d.is_some_and(|d| d.selected),
                     d.map(|d| clean_device_name(&d.name))
-                        .unwrap_or_else(|| "Choose device".into()),
+                        .unwrap_or_else(|| "Chọn thiết bị".into()),
                     !list.is_empty(),
                 )
             }
@@ -1293,7 +1293,7 @@ impl State {
                 };
                 (
                     muted,
-                    if muted { "Muted" } else { "On" }.into(),
+                    if muted { "Đã tắt tiếng" } else { "Đang bật" }.into(),
                     if c.kind.is_input() {
                         s.mic_volume.is_some()
                     } else {
@@ -1313,7 +1313,7 @@ impl State {
                 (
                     on,
                     d.map(|d| d.name.clone())
-                        .unwrap_or_else(|| "Disconnected".into()),
+                        .unwrap_or_else(|| "Đã ngắt kết nối".into()),
                     d.is_some_and(|d| {
                         if c.kind == Kind::Hdr {
                             d.hdr_supported && d.enabled
@@ -2275,9 +2275,9 @@ impl State {
                 if devices.is_empty() {
                     cv.text(
                         if c.kind == Kind::Source {
-                            if self.snapshot.displays.iter().any(|d|d.id==c.target&&!d.enabled){"Use the laptop or monitor menu to switch back"}else{"Input switching not exposed by this monitor"}
+                            if self.snapshot.displays.iter().any(|d|d.id==c.target&&!d.enabled){"Dùng menu màn hình để chuyển lại"}else{"Màn hình không hỗ trợ chuyển nguồn vào"}
                         } else {
-                            "No devices connected"
+                            "Chưa kết nối thiết bị"
                         },
                         [r[0] + 12., r[1] + 28., r[2] - 12., r[3] - 4.],
                         10.,
@@ -2333,7 +2333,7 @@ impl State {
                         (rr[1] + rr[3]) / 2. + 8.,
                     ];
                     if c.kind == Kind::Display && !enabled {
-                        let device = name.trim_end_matches(" · Main Display");
+                        let device = name.trim_end_matches(" · Màn hình chính");
                         if rr[3] - rr[1] >= 29. {
                             cv.text(
                                 device,
@@ -2344,7 +2344,7 @@ impl State {
                                 0,
                             );
                             cv.text(
-                                "Main Display",
+                                "Màn hình chính",
                                 [rr[0] + 8., rr[1] + 17., toggle[0] - 7., rr[3]],
                                 8.,
                                 false,
@@ -2353,7 +2353,7 @@ impl State {
                             );
                         } else {
                             cv.text(
-                                &format!("Main Display · {device}"),
+                                &format!("Màn hình chính · {device}"),
                                 [rr[0] + 8., rr[1], toggle[0] - 7., rr[3]],
                                 10.,
                                 true,
@@ -2776,12 +2776,12 @@ impl State {
                                     .iter()
                                     .any(|d| d.id == c.target && !d.enabled)
                                 {
-                                    "Use the laptop or monitor menu to switch back"
+                                    "Dùng menu màn hình để chuyển lại"
                                 } else {
-                                    "Input switching not exposed by this monitor"
+                                    "Màn hình không hỗ trợ chuyển nguồn vào"
                                 }
                             } else {
-                                "No devices connected"
+                                "Chưa kết nối thiết bị"
                             },
                             [18., 92., w - 18., h - 18.],
                             11.,
@@ -3026,11 +3026,11 @@ impl State {
                     0,
                 );
                 let detail = if candidate.kind.is_volume() {
-                    "Volume · tap icon to mute"
+                    "Âm lượng · bấm biểu tượng để tắt tiếng"
                 } else if candidate.kind.is_group() {
-                    "All connected devices"
+                    "Tất cả thiết bị đã kết nối"
                 } else {
-                    "Display HDR toggle"
+                    "Bật/tắt HDR màn hình"
                 };
                 cv.text(
                     detail,
@@ -3063,7 +3063,7 @@ impl State {
         let c = Canvas::new(frame.dc, self.dpi);
         if self.manager {
             c.text(
-                "CONTROL LIBRARY",
+                "THƯ VIỆN ĐIỀU KHIỂN",
                 [24., 14., w - 70., 32.],
                 9.,
                 false,
@@ -3071,7 +3071,7 @@ impl State {
                 0,
             );
             c.text(
-                "Control manager",
+                "Quản lý điều khiển",
                 [24., 35., w - 70., 70.],
                 22.,
                 true,
@@ -3082,7 +3082,7 @@ impl State {
             c.round(search, 16., ink, 18, true, false);
             c.text(
                 if self.manager_query.is_empty() {
-                    "Search controls…"
+                    "Tìm điều khiển…"
                 } else {
                     &self.manager_query
                 },
@@ -3094,7 +3094,7 @@ impl State {
             );
             self.hits.push((Action::Search, search));
             c.text(
-                &format!("{} / 40 controls", self.config.controls.len()),
+                &format!("{} / 40 điều khiển", self.config.controls.len()),
                 [24., h - 46., w - 110., h - 18.],
                 10.,
                 false,
@@ -3104,7 +3104,7 @@ impl State {
             let done = [w - 94., h - 48., w - 24., h - 18.];
             c.soft_shadow(done, 15., 12., 3., 2.);
             c.round(done, 15., 0xffffff, 130, false, false);
-            c.text("Done", done, 11., false, ink, 1);
+            c.text("Xong", done, 11., false, ink, 1);
             self.hits.push((Action::Back, done));
         }
         for (label, r) in [
@@ -3112,15 +3112,15 @@ impl State {
                 if self.manager {
                     ""
                 } else if self.editing {
-                    "Done"
+                    "Xong"
                 } else {
-                    "Edit"
+                    "Sửa"
                 },
                 [18., 12., 68., 42.],
             ),
             (
                 if self.editing && !self.manager && w >= 220. {
-                    "+ Add"
+                    "+ Thêm"
                 } else {
                     ""
                 },
@@ -3138,7 +3138,7 @@ impl State {
                         | if light { lenses::LIGHT } else { 0 }
                         | if self.editing { lenses::ACTIVE } else { 0 },
                 );
-                if label == "Edit" {
+                if label == "Sửa" {
                     self.icons.pencil(
                         &c,
                         self.dpi,
@@ -3175,9 +3175,9 @@ impl State {
         if !self.manager && settings_ui::widget_title_visible(w, h) {
             c.text(
                 if self.manager {
-                    "Control manager"
+                    "Quản lý điều khiển"
                 } else {
-                    "Control Center"
+                    "Trung tâm điều khiển"
                 },
                 [144., 12., w - 100., 42.],
                 12.,
@@ -3202,7 +3202,7 @@ impl State {
         );
         if self.config.controls.is_empty() && !self.manager {
             c.text(
-                "Use Edit to add controls",
+                "Bấm Sửa để thêm điều khiển",
                 [20., 54., w - 20., h - 18.],
                 12.,
                 false,
@@ -3488,7 +3488,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             let owner = s.editor.as_ref().map(|u| u.hwnd()).unwrap_or(hwnd);
             drop(s);
             if let Some(c) = original {
-                if let Some(label) = crate::text_prompt::choose(owner, "Rename control", &c.label) {
+                if let Some(label) = crate::text_prompt::choose(owner, "Đổi tên điều khiển", &c.label) {
                     if let Ok(mut s) = (*ptr).try_borrow_mut() {
                         if let Some(item) =
                             s.config.controls.iter_mut().find(|item| item.id == c.id)
@@ -4389,7 +4389,7 @@ mod tests {
                 }];
                 s.paint();
                 assert!(!s.hits.iter().any(|(a, _)| *a == Action::Device(0, 0)));
-                assert!(s.devices(Kind::Display)[0].1.contains("Main Display"));
+                assert!(s.devices(Kind::Display)[0].1.contains("Màn hình chính"));
                 let before = s.tiles(420., 560., 0.).0[0].rect;
                 s.snapshot.displays.push(backend::Display {
                     id: "new".into(),

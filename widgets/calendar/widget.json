@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "id": "calendar",
-  "name": "Calendar",
-  "description": "Your dates and events.",
+  "name": "Lịch (Calendar)",
+  "description": "Lịch dương, lịch âm Việt Nam và ngày tháng.",
   "icon": "calendar",
   "accent": "#34d399",
   "order": 30,

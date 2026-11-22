@@ -311,7 +311,7 @@ impl State {
                 0x0000ff
             };
             c.round(r, 13., color, 255, false, false);
-            c.text("Sign in", r, 11., true, 0xffffff, 1);
+            c.text("Đăng nhập", r, 10., true, 0xffffff, 1);
             self.buttons.push(Button {
                 rect: r,
                 action: Action::SignIn,
@@ -346,7 +346,7 @@ impl State {
     }
     fn track_title(&self) -> &str {
         if self.playback.title.is_empty() {
-            "Your music"
+            "Nhạc của bạn"
         } else {
             &self.playback.title
         }

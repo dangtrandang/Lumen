@@ -199,8 +199,8 @@ pub fn note_day(stamp: u64) -> String {
         if FileTimeToSystemTime(&time, &mut utc) == 0
             || SystemTimeToTzSpecificLocalTime(null(), &utc, &mut local) == 0
         {
-            return "Saved".into();
+            return "Đã lưu".into();
         }
-        ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][local.wDayOfWeek as usize % 7].into()
+        ["CN", "Th 2", "Th 3", "Th 4", "Th 5", "Th 6", "Th 7"][local.wDayOfWeek as usize % 7].into()
     }
 }

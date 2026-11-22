@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "id": "launcher",
-  "name": "App Dock",
-  "description": "The glass app launcher.",
+  "name": "Khay Ứng Dụng (App Dock)",
+  "description": "Khay khởi chạy ứng dụng kính trong suốt.",
   "icon": "launcher",
   "accent": "#7c9cff",
   "order": 0,

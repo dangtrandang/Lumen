@@ -1,16 +1,10 @@
 //! Theme detail port from CalendarApp.tsx, calendar.css and widget-designs.css.
-use super::{artwork::Material, color, layout::Layout, typography::Style, Action, State, MONTHS};
+use super::{
+    artwork::Material, color, layout::Layout, typography::Style, Action, State, MONTHS,
+    MONTHS_SHORT, WEEKDAYS, WEEKDAYS_SHORT,
+};
 use crate::render::Canvas;
 use windows_sys::Win32::Graphics::Gdi::HDC;
-const WEEKDAYS: [&str; 7] = [
-    "Sunday",
-    "Monday",
-    "Tuesday",
-    "Wednesday",
-    "Thursday",
-    "Friday",
-    "Saturday",
-];
 fn theme_accent(theme: &str, ambient: u32) -> u32 {
     match theme {
         "blocks" => color(255, 144, 41),
@@ -66,9 +60,10 @@ impl State {
         let l = Layout::new(t, w, h);
         let c = Canvas::new(dc, self.dpi);
         let accent = theme_accent(t, ambient);
-        let month = MONTHS[self.cursor.month as usize - 1];
+        let month_idx = self.cursor.month as usize - 1;
+        let month = MONTHS[month_idx];
         let title = if w < 240. {
-            format!("{} {:02}", &month[..3], self.cursor.year % 100)
+            format!("{} {:02}", MONTHS_SHORT[month_idx], self.cursor.year % 100)
         } else {
             format!("{} {}", month, self.cursor.year)
         };
@@ -116,9 +111,9 @@ impl State {
                 self.typo.draw(
                     dc,
                     self.dpi,
-                    "Today",
+                    "Hôm nay",
                     rect,
-                    Style::new(9., 600, ink).alpha(if hover || pressed { 1. } else { 0.8 }),
+                    Style::new(8.5, 600, ink).alpha(if hover || pressed { 1. } else { 0.8 }),
                     1,
                 );
             } else {
@@ -151,7 +146,7 @@ impl State {
         let cw = (l.weekdays[2] - l.weekdays[0]) / 7.;
         for i in 0..7 {
             let day = (i + self.config.week_starts_on as usize) % 7;
-            let label = &WEEKDAYS[day][..if w < 224. { 1 } else { 2 }];
+            let label = WEEKDAYS_SHORT[day];
             self.typo.draw(
                 dc,
                 self.dpi,
@@ -227,17 +222,60 @@ impl State {
             } else {
                 ink
             };
-            let mut style = Style::new(
-                ((r[3] - r[1]) * 0.72).clamp(8., 11.),
-                if selected { 650 } else { 500 },
-                fg,
-            )
-            .alpha(opacity);
-            if t == "almanac" {
-                style = style.serif();
+            let cell_h = r[3] - r[1];
+            if self.config.show_lunar && cell_h >= 19. {
+                let mut style = Style::new(
+                    (cell_h * 0.48).clamp(7.5, 10.5),
+                    if selected { 650 } else { 500 },
+                    fg,
+                )
+                .alpha(opacity);
+                if t == "almanac" {
+                    style = style.serif();
+                }
+                self.typo.draw(
+                    dc,
+                    self.dpi,
+                    &date.day.to_string(),
+                    [r[0], r[1], r[2], r[1] + cell_h * 0.62],
+                    style,
+                    1,
+                );
+                let lunar = date.lunar();
+                let l_color = if selected {
+                    fg
+                } else if lunar.is_special() {
+                    accent
+                } else {
+                    fg
+                };
+                let l_style = Style::new(
+                    (cell_h * 0.28).clamp(6., 7.5),
+                    if lunar.is_special() { 650 } else { 450 },
+                    l_color,
+                )
+                .alpha(opacity * if selected || lunar.is_special() { 0.92 } else { 0.58 });
+                self.typo.draw(
+                    dc,
+                    self.dpi,
+                    &lunar.short_label(),
+                    [r[0], r[1] + cell_h * 0.55, r[2], r[3]],
+                    l_style,
+                    1,
+                );
+            } else {
+                let mut style = Style::new(
+                    (cell_h * 0.72).clamp(8., 11.),
+                    if selected { 650 } else { 500 },
+                    fg,
+                )
+                .alpha(opacity);
+                if t == "almanac" {
+                    style = style.serif();
+                }
+                self.typo
+                    .draw(dc, self.dpi, &date.day.to_string(), r, style, 1);
             }
-            self.typo
-                .draw(dc, self.dpi, &date.day.to_string(), r, style, 1);
             if selected && self.keyboard_day {
                 let focus_rect = if circular {
                     [r[0] - 1., r[1] - 1., r[2] + 1., r[3] + 1.]
@@ -265,7 +303,7 @@ impl State {
             self.hwnd,
             self.dpi,
             w,
-            "Calendar",
+            "Lịch",
             ink,
             header_action(self.hover),
             header_action(self.pressed),
@@ -310,10 +348,20 @@ impl State {
                 } else {
                     0xffffff
                 };
+                let strip_text = if self.config.show_lunar {
+                    format!(
+                        "{} {} · {}",
+                        selected.day,
+                        MONTHS[selected.month as usize - 1],
+                        selected.lunar().full_label()
+                    )
+                } else {
+                    format!("{} {}", selected.day, MONTHS[selected.month as usize - 1])
+                };
                 self.typo.draw(
                     dc,
                     self.dpi,
-                    &format!("{} {}", selected.day, MONTHS[selected.month as usize - 1]),
+                    &strip_text,
                     [r[0] + 10., r[1], r[2] - 42., r[3]],
                     Style::new(11., 600, text_ink),
                     0,
@@ -358,6 +406,16 @@ impl State {
                         .spacing(-6.),
                     0,
                 );
+                if self.config.show_lunar {
+                    self.typo.draw(
+                        dc,
+                        self.dpi,
+                        &selected.lunar().full_label(),
+                        [r[0], (y + 15. + size).min(r[3] - 18.), r[2] - 22., r[3] - 2.],
+                        Style::new(9.5, 500, ink).alpha(0.75),
+                        0,
+                    );
+                }
                 let vertical_text =
                     format!("{} {}", MONTHS[selected.month as usize - 1], selected.year);
                 let vertical_style = Style::new(12., 400, ink).spacing(1.).alpha(0.73);
@@ -472,10 +530,20 @@ impl State {
                     },
                     0,
                 );
+                let sub_label = if self.config.show_lunar {
+                    format!(
+                        "{} {} · {}",
+                        MONTHS[selected.month as usize - 1],
+                        selected.year,
+                        selected.lunar().full_label()
+                    )
+                } else {
+                    format!("{} {}", MONTHS[selected.month as usize - 1], selected.year)
+                };
                 self.typo.draw(
                     dc,
                     self.dpi,
-                    &format!("{} {}", MONTHS[selected.month as usize - 1], selected.year),
+                    &sub_label,
                     [
                         left,
                         y + size + 14. + month_gap,
@@ -536,7 +604,7 @@ impl State {
             self.typo.draw(
                 dc,
                 self.dpi,
-                "Through the month",
+                "Đã qua trong tháng",
                 [left, y, right, y + 14.],
                 Style::new(10., 400, fg),
                 0,
@@ -602,7 +670,7 @@ impl State {
             self.typo.draw(
                 dc,
                 self.dpi,
-                &format!("Day {} of {}", selected.day, selected.days_in_month()),
+                &format!("Ngày {} / {}", selected.day, selected.days_in_month()),
                 [left, bar[3] + gap, right, bar[3] + gap + 12.],
                 Style::new(10., 400, fg).alpha(0.75),
                 0,
@@ -620,7 +688,7 @@ impl State {
             self.hwnd,
             self.dpi,
             w,
-            "Calendar",
+            "Lịch",
             ink,
             header_action(self.hover),
             header_action(self.pressed),
@@ -653,12 +721,17 @@ impl State {
             0,
         );
         if show_year {
+            let year_text = if self.config.show_lunar && l.date.is_none() {
+                format!("{} · {}", self.cursor.year, selected.lunar().full_label())
+            } else {
+                self.cursor.year.to_string()
+            };
             self.typo.draw(
                 dc,
                 self.dpi,
-                &self.cursor.year.to_string(),
-                [month_end + 3., label[1] + 2., label[2], label[3]],
-                Style::new(10., 500, ink).alpha(0.53),
+                &year_text,
+                [month_end + 4., label[1] + 2., label[2], label[3]],
+                Style::new(10., 500, ink).alpha(0.62),
                 0,
             );
         }
@@ -671,7 +744,7 @@ impl State {
             self.typo.draw(
                 dc,
                 self.dpi,
-                &WEEKDAYS[day][..2].to_uppercase(),
+                WEEKDAYS_SHORT[day],
                 [x, l.weekdays[1], x + cell, l.weekdays[3]],
                 Style::new(8.5, 650, ink).spacing(0.765).alpha(0.53),
                 1,
@@ -759,9 +832,9 @@ impl State {
                     self.typo.draw(
                         dc,
                         self.dpi,
-                        "Today",
+                        "Hôm nay",
                         button.rect,
-                        Style::new(9.5, 600, ink).alpha(if hover || pressed { 1. } else { 0.73 }),
+                        Style::new(9., 600, ink).alpha(if hover || pressed { 1. } else { 0.73 }),
                         1,
                     );
                 }
@@ -808,7 +881,7 @@ impl State {
                     } else if today {
                         self.artwork
                             .border(dc, self.dpi, r, radius, accent, 0.75 * opacity, 1.);
-                        if t == "lumen" || t == "almanac" {
+                        if (t == "lumen" || t == "almanac") && !self.config.show_lunar {
                             let x = (r[0] + r[2]) / 2.;
                             c.round(
                                 [x - 1.5, r[3] - 7., x + 1.5, r[3] - 4.],
@@ -825,21 +898,70 @@ impl State {
                     } else {
                         ink
                     };
-                    let mut style = Style::new(12.5, if selected { 650 } else { 500 }, fg).alpha(
-                        opacity
-                            * if selected || today {
-                                1.
+                    let base_alpha = opacity
+                        * if selected || today {
+                            1.
+                        } else if outside {
+                            0.53
+                        } else {
+                            0.73
+                        };
+                    let cell_h = r[3] - r[1];
+                    if self.config.show_lunar && cell_h >= 22. {
+                        let mut style =
+                            Style::new(11.5, if selected { 650 } else { 500 }, fg).alpha(base_alpha);
+                        if t == "almanac" {
+                            style = style.serif();
+                        }
+                        self.typo.draw(
+                            dc,
+                            self.dpi,
+                            &date.day.to_string(),
+                            [r[0], r[1] + 1., r[2], r[1] + cell_h * 0.60],
+                            style,
+                            1,
+                        );
+                        let lunar = date.lunar();
+                        let l_color = if selected {
+                            fg
+                        } else if lunar.is_special() {
+                            accent
+                        } else {
+                            fg
+                        };
+                        let l_alpha = opacity
+                            * if selected {
+                                0.88
+                            } else if lunar.is_special() {
+                                0.95
                             } else if outside {
-                                0.53
+                                0.38
                             } else {
-                                0.73
-                            },
-                    );
-                    if t == "almanac" {
-                        style = style.serif();
+                                0.54
+                            };
+                        let l_style = Style::new(
+                            7.5,
+                            if lunar.is_special() { 650 } else { 450 },
+                            l_color,
+                        )
+                        .alpha(l_alpha);
+                        self.typo.draw(
+                            dc,
+                            self.dpi,
+                            &lunar.short_label(),
+                            [r[0], r[1] + cell_h * 0.54, r[2], r[3] - 1.],
+                            l_style,
+                            1,
+                        );
+                    } else {
+                        let mut style =
+                            Style::new(12.5, if selected { 650 } else { 500 }, fg).alpha(base_alpha);
+                        if t == "almanac" {
+                            style = style.serif();
+                        }
+                        self.typo
+                            .draw(dc, self.dpi, &date.day.to_string(), r, style, 1);
                     }
-                    self.typo
-                        .draw(dc, self.dpi, &date.day.to_string(), r, style, 1);
                     if circular && selected && self.keyboard_day {
                         let pad = if r[3] - r[1] < 26. { 1. } else { 3. };
                         self.artwork.border(

@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "id": "controls",
-  "name": "Control Center",
-  "description": "Display, HDR, audio and volume controls.",
+  "name": "Trung Tâm Điều Khiển",
+  "description": "Điều khiển màn hình, HDR, thiết bị âm thanh và âm lượng.",
   "icon": "controls",
   "accent": "#9cc8ff",
   "order": 50,

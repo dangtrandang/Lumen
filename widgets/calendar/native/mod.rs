@@ -11,7 +11,7 @@ use crate::{
     model::wide,
     render::{self, Canvas},
 };
-use model::{Config, Date, MONTHS, THEMES};
+use model::{Config, Date, MONTHS, MONTHS_SHORT, THEMES, WEEKDAYS, WEEKDAYS_SHORT};
 use std::{
     cell::RefCell,
     mem::{size_of, zeroed},
@@ -327,21 +327,21 @@ impl State {
         use crate::settings_ui::{Choice, Row};
         let c = &self.config;
         let rows = vec![
-            Row::section("Background"),
-            Row::slider(2, "Glass tint", c.tint, 0., 100., "%"),
-            Row::slider(3, "Frost strength", c.frost_strength, 0., 100., "%"),
-            Row::slider(5, "Background opacity", c.opacity, 0., 100., "%"),
-            Row::note("Background opacity lets desktop windows show through; dates stay clear."),
+            Row::section("Nền"),
+            Row::slider(2, "Độ phủ màu kính", c.tint, 0., 100., "%"),
+            Row::slider(3, "Độ đục kính mờ", c.frost_strength, 0., 100., "%"),
+            Row::slider(5, "Độ mờ nền", c.opacity, 0., 100., "%"),
+            Row::note("Độ mờ nền giúp nhìn xuyên qua xuống màn hình; các ngày vẫn hiển thị rõ nét."),
             Row::choices(
                 6,
-                "Surface palette",
+                "Bảng màu bề mặt",
                 &c.palette,
                 crate::settings_ui::palette_choices(),
             ),
-            Row::section("Calendar"),
+            Row::section("Lịch"),
             Row::choices(
                 7,
-                "Theme",
+                "Giao diện",
                 &c.theme,
                 THEMES
                     .iter()
@@ -350,18 +350,24 @@ impl State {
             ),
             Row::choices(
                 8,
-                "Week starts",
+                "Tuần bắt đầu từ",
                 if c.week_starts_on == 1 {
                     "monday"
                 } else {
                     "sunday"
                 },
                 vec![
-                    Choice::new("monday", "Monday", None),
-                    Choice::new("sunday", "Sunday", None),
+                    Choice::new("monday", "Thứ Hai", None),
+                    Choice::new("sunday", "Chủ Nhật", None),
                 ],
             ),
-            Row::section("Window"),
+            Row::toggle(
+                10,
+                "Hiển thị lịch âm",
+                "Hiện ngày âm lịch và năm Can Chi trên lịch",
+                c.show_lunar,
+            ),
+            Row::section("Cửa sổ"),
         ];
         rows
     }
@@ -373,8 +379,8 @@ impl State {
         if self.settings_host.is_none() {
             match crate::settings_ui::Host::create(
                 self.hwnd,
-                "Calendar settings",
-                "Changes here apply only to Calendar.",
+                "Cài đặt Lịch",
+                "Các thay đổi tại đây chỉ áp dụng cho Lịch.",
                 self.glass.clone(),
                 rows.clone(),
                 SETTINGS_CHANGED,
@@ -434,6 +440,10 @@ impl State {
                 (9, Value::Bool(v)) => {
                     self.config.floating = v;
                     PostMessageW(self.hwnd, APPLY_MODE, 0, 0);
+                    structural = true;
+                }
+                (10, Value::Bool(v)) => {
+                    self.config.show_lunar = v;
                     structural = true;
                 }
                 _ => {}

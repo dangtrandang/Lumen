@@ -190,7 +190,7 @@ impl State {
 
     fn theme_title(&self) -> &str {
         if self.playback.title.is_empty() {
-            "Your music"
+            "Nhạc của bạn"
         } else {
             &self.playback.title
         }

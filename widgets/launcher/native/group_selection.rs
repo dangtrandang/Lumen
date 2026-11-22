@@ -214,7 +214,7 @@ impl App {
         let ink = self.search_ink;
         if w >= 360 {
             c.text(
-                &format!("Group apps · {} selected", state.checked.len()),
+                &format!("Nhóm ứng dụng · đã chọn {}", state.checked.len()),
                 [30., 22., w as f32 - 180., 52.],
                 11.,
                 true,
@@ -226,12 +226,12 @@ impl App {
         for (i, (hit, label, r)) in [
             (
                 Hit::Cancel,
-                "Cancel",
+                "Hủy",
                 [w as f32 - 170., 22., w as f32 - 100., 52.],
             ),
             (
                 Hit::Done,
-                "Done",
+                "Xong",
                 [w as f32 - 92., 22., w as f32 - 24., 52.],
             ),
         ]

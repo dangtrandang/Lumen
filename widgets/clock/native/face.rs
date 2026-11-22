@@ -220,8 +220,8 @@ impl Face<'_> {
     }
     fn meter_in(&self, label: &str, value: &str, r: [f32; 4], f: f32, count: usize) {
         let accent = match label {
-            "This hour" => rgb(41, 197, 143),
-            "This minute" => rgb(86, 198, 231),
+            "This hour" | "Giờ này" => rgb(41, 197, 143),
+            "This minute" | "Phút này" => rgb(86, 198, 231),
             _ => self.accent,
         };
         let w = (r[2] - r[0]).max(20.);
@@ -387,7 +387,7 @@ pub(super) fn draw_content(
         mono: cfg.theme == "terminal",
     };
     let zone = if cfg.time_zone == "local" {
-        "Local time".into()
+        "Giờ địa phương".into()
     } else {
         cfg.time_zone
             .split('/')
@@ -396,7 +396,7 @@ pub(super) fn draw_content(
             .replace('_', " ")
     };
     let date = date(t);
-    let seconds = format!("{:02} seconds", t.wSecond);
+    let seconds = format!("{:02} giây", t.wSecond);
     let progress = progress(t);
     if mode != layout::Mode::Classic {
         responsive::draw(&f, cfg, t, mode, w, h, &date, &zone, progress, emblem);
@@ -433,7 +433,7 @@ pub(super) fn draw_content(
                     0,
                 );
                 f.text(
-                    "SECONDS",
+                    "GIÂY",
                     [112., 219., 310., 243.],
                     10.,
                     true,
@@ -454,23 +454,23 @@ pub(super) fn draw_content(
         "rose" => {
             f.digital(t, cfg, [23., 78., 318., 164.], 70., 0);
             f.meter(
-                "Day elapsed",
+                "Đã qua trong ngày",
                 &format!("{}%", (progress * 100.) as u32),
                 187.,
                 progress,
                 24,
             );
             f.meter(
-                "This hour",
-                &format!("{} / 60 min", t.wMinute),
+                "Giờ này",
+                &format!("{} / 60 phút", t.wMinute),
                 232.,
                 t.wMinute as f32 / 60.,
                 30,
             );
             if cfg.show_seconds {
                 f.meter(
-                    "This minute",
-                    &format!("{} / 60 sec", t.wSecond),
+                    "Phút này",
+                    &format!("{} / 60 giây", t.wSecond),
                     277.,
                     t.wSecond as f32 / 60.,
                     30,
@@ -512,7 +512,7 @@ pub(super) fn draw_content(
                 );
                 f.line(&[(x, 178.), (x + 139., 178.)], color("ocean"), 190, 2.);
                 f.text(
-                    if i == 0 { "HOURS" } else { "MINUTES" },
+                    if i == 0 { "GIỜ" } else { "PHÚT" },
                     [x, 220., x + 139., 239.],
                     8.,
                     true,
@@ -522,7 +522,7 @@ pub(super) fn draw_content(
             }
             if cfg.show_seconds {
                 f.meter(
-                    "Seconds",
+                    "Giây",
                     &format!("{:02}", t.wSecond),
                     272.,
                     t.wSecond as f32 / 60.,
@@ -539,9 +539,9 @@ pub(super) fn draw_content(
                     f.digital(t, cfg, [58., y - 8., 314., y + 45.], 45., 0);
                     f.text(
                         &if cfg.show_seconds {
-                            format!("NOW · {:02}s", t.wSecond)
+                            format!("HIỆN TẠI · {:02}s", t.wSecond)
                         } else {
-                            "NOW".into()
+                            "HIỆN TẠI".into()
                         },
                         [234., y + 40., 314., y + 56.],
                         8.,
@@ -575,7 +575,7 @@ pub(super) fn draw_content(
                         &format!(
                             "{}h {}",
                             offset.abs(),
-                            if *offset < 0 { "ago" } else { "ahead" }
+                            if *offset < 0 { "trước" } else { "tới" }
                         ),
                         [225., y, 314., y + 25.],
                         10.,
@@ -620,7 +620,7 @@ pub(super) fn draw_content(
                 );
             }
             f.text(
-                &format!("{}% OF THE DAY", (progress * 100.) as u32),
+                &format!("{}% TRONG NGÀY", (progress * 100.) as u32),
                 [60., 264., 280., 283.],
                 9.,
                 true,

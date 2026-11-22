@@ -1940,7 +1940,7 @@ impl State {
                 } else if self.query.is_empty() {
                     if search[2] - search[0] >= 136. {
                         c.text_alpha(
-                            "Search notes…",
+                            "Tìm ghi chú…",
                             [
                                 search[0] + 34.,
                                 search[1] + 6.,
@@ -2008,7 +2008,7 @@ impl State {
             let c = Canvas::new(frame.dc, self.dpi);
             c.text(
                 &if self.status.is_empty() {
-                    format!("{} notes", self.board.notes.len())
+                    format!("{} ghi chú", self.board.notes.len())
                 } else {
                     self.status.clone()
                 },
@@ -2027,7 +2027,7 @@ impl State {
             } else {
                 icons::folder(&c, w - 124., h - 40., muted);
                 c.text(
-                    "Open folder",
+                    "Mở thư mục",
                     [w - 104., h - 41., w - 24., h - 19.],
                     11.,
                     false,
@@ -2353,9 +2353,9 @@ impl State {
                 let top = self.content_top() + if self.chrome().tiny() { 8. } else { 20. };
                 c.text(
                     if self.query.is_empty() {
-                        "Your thoughts here"
+                        "Viết ghi chú của bạn tại đây"
                     } else {
-                        "No matching notes"
+                        "Không có ghi chú phù hợp"
                     },
                     [16., top, w - 16., top + 24.],
                     if self.chrome().tiny() { 13. } else { 19. },
@@ -2365,7 +2365,7 @@ impl State {
                 );
                 if !self.chrome().tiny() {
                     c.text(
-                        "Create a note with + or Ctrl + N",
+                        "Tạo ghi chú mới bằng nút + hoặc Ctrl + N",
                         [24., top + 32., w - 24., top + 60.],
                         12.,
                         false,

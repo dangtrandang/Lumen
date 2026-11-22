@@ -6,22 +6,22 @@ const fn cref(rgb: u32) -> u32 {
     ((rgb >> 16) & 255) | (rgb & 0xff00) | ((rgb & 255) << 16)
 }
 pub const PRESETS: [(&str, &str, u32); 12] = [
-    ("gradient:afterglow", "Afterglow", cref(0xc6b9cb)),
-    ("gradient:dawn", "Dawn", cref(0xb3a0c8)),
-    ("gradient:dusk", "Dusk", cref(0x6d4d88)),
-    ("gradient:dust", "Dust", cref(0xb39c9e)),
-    ("gradient:aurora", "Aurora", cref(0x376c73)),
-    ("gradient:ocean", "Ocean", cref(0x286e9b)),
-    ("gradient:rose", "Rose", cref(0xc68ba5)),
-    ("gradient:ember", "Ember", cref(0xa75a4d)),
-    ("gradient:mist", "Mist", cref(0xc2d5df)),
-    ("gradient:midnight", "Midnight", cref(0x29304d)),
+    ("gradient:afterglow", "Hoàng hôn", cref(0xc6b9cb)),
+    ("gradient:dawn", "Bình minh", cref(0xb3a0c8)),
+    ("gradient:dusk", "Chạng vạng", cref(0x6d4d88)),
+    ("gradient:dust", "Sương bụi", cref(0xb39c9e)),
+    ("gradient:aurora", "Cực quang", cref(0x376c73)),
+    ("gradient:ocean", "Đại dương", cref(0x286e9b)),
+    ("gradient:rose", "Hồng phai", cref(0xc68ba5)),
+    ("gradient:ember", "Than hồng", cref(0xa75a4d)),
+    ("gradient:mist", "Sương mù", cref(0xc2d5df)),
+    ("gradient:midnight", "Đêm khuya", cref(0x29304d)),
     (
         "wallpaper-auto",
-        "Wallpaper · Auto",
+        "Hình nền · Tự động",
         crate::accent::FALLBACK,
     ),
-    ("custom", "Custom color…", cref(0x67798e)),
+    ("custom", "Màu tùy chỉnh…", cref(0x67798e)),
 ];
 const LEGACY: [(&str, u32); 9] = [
     ("obsidian", 0x27221f),

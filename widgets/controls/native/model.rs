@@ -37,15 +37,15 @@ impl Kind {
     }
     pub fn name(self) -> &'static str {
         match self {
-            Self::Display => "Display",
+            Self::Display => "Màn hình",
             Self::Hdr => "HDR",
-            Self::Source => "Monitor input",
-            Self::Audio => "Audio output",
-            Self::Volume => "Volume",
-            Self::Mute => "Mute",
+            Self::Source => "Nguồn vào màn hình",
+            Self::Audio => "Đầu ra âm thanh",
+            Self::Volume => "Âm lượng",
+            Self::Mute => "Tắt tiếng",
             Self::Microphone => "Microphone",
-            Self::MicVolume => "Microphone volume",
-            Self::MicMute => "Microphone mute",
+            Self::MicVolume => "Âm lượng Microphone",
+            Self::MicMute => "Tắt tiếng Microphone",
         }
     }
     pub fn is_group(self) -> bool {
@@ -227,19 +227,24 @@ impl Config {
         self.controls.retain_mut(|c| {
             if c.kind == Kind::Mute {
                 c.kind = Kind::Volume;
-                c.label = "Volume".into();
+                c.label = "Âm lượng".into();
             }
             if c.kind == Kind::MicMute {
                 c.kind = Kind::MicVolume;
-                c.label = "Microphone volume".into();
+                c.label = "Âm lượng Microphone".into();
             }
             if c.kind.is_volume() {
+                if matches!(c.label.as_str(), "Volume" | "Mute") {
+                    c.label = "Âm lượng".into();
+                } else if matches!(c.label.as_str(), "Microphone volume" | "Microphone mute") {
+                    c.label = "Âm lượng Microphone".into();
+                }
                 return seen.insert(c.kind);
             }
             if c.kind.is_group() && c.kind != Kind::Source {
                 c.target.clear();
                 c.label = if c.kind == Kind::Display {
-                    "Displays"
+                    "Màn hình"
                 } else {
                     c.kind.name()
                 }
@@ -292,11 +297,11 @@ pub struct Tile {
     pub rect: [f32; 4],
 }
 pub const GROUP_NAMES: [&str; 6] = [
-    "Audio controls",
-    "Audio outputs",
-    "Microphone controls",
-    "Microphone inputs",
-    "Displays",
+    "Điều khiển âm thanh",
+    "Đầu ra âm thanh",
+    "Điều khiển Microphone",
+    "Đầu vào Microphone",
+    "Màn hình",
     "HDR",
 ];
 pub fn manager_layout(

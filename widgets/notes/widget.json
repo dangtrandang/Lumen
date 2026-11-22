@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "id": "notes",
-  "name": "Sticky Notes",
-  "description": "Quick notes on a glass board.",
+  "name": "Ghi Chú (Sticky Notes)",
+  "description": "Ghi chú nhanh trên bảng kính trong suốt.",
   "icon": "notes",
   "accent": "#fbbf24",
   "order": 20,

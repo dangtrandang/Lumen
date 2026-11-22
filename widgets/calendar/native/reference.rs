@@ -4,19 +4,10 @@ use super::{
     color,
     layout::{Rect, ReferenceLayout},
     typography::Style,
-    Action, State, MONTHS,
+    Action, State, MONTHS, MONTHS_SHORT, WEEKDAYS, WEEKDAYS_SHORT,
 };
 use crate::render::Canvas;
 use windows_sys::Win32::Graphics::Gdi::HDC;
-const DAYS: [&str; 7] = [
-    "Sunday",
-    "Monday",
-    "Tuesday",
-    "Wednesday",
-    "Thursday",
-    "Friday",
-    "Saturday",
-];
 
 impl State {
     /// Agenda's split is a full-height color region of the same outer surface.
@@ -127,8 +118,8 @@ impl State {
             c.soft_shadow(active, 7., 0.1, 5., 2.);
             c.round(active, 7., 0xffffff, 238, false, false);
             for (text, rect, active) in [
-                ("Weekly", r.weekly, self.config.mist_weekly),
-                ("Monthly", r.monthly, !self.config.mist_weekly),
+                ("Tuần", r.weekly, self.config.mist_weekly),
+                ("Tháng", r.monthly, !self.config.mist_weekly),
             ] {
                 self.reference_text(
                     dc,
@@ -142,9 +133,19 @@ impl State {
                 );
             }
             let size = ((r.hero[3] - r.hero[1]) * 0.95).min(w * 0.145).max(16.);
+            let hero_text = if self.config.show_lunar {
+                format!(
+                    "{} {} · {}",
+                    selected.day,
+                    MONTHS[selected.month as usize - 1],
+                    selected.lunar().full_label()
+                )
+            } else {
+                format!("{}  {}", MONTHS[selected.month as usize - 1], selected.day)
+            };
             self.reference_text(
                 dc,
-                &format!("{}  {}", MONTHS[selected.month as usize - 1], selected.day),
+                &hero_text,
                 r.hero,
                 size,
                 350,
@@ -165,11 +166,21 @@ impl State {
                     1.,
                     1,
                 );
+                let wk_text = if self.config.show_lunar {
+                    format!(
+                        "{} · ÂL {:02}/{:02}",
+                        WEEKDAYS[selected.weekday()].to_uppercase(),
+                        selected.lunar().day,
+                        selected.lunar().month
+                    )
+                } else {
+                    WEEKDAYS[selected.weekday()].to_uppercase()
+                };
                 self.reference_text(
                     dc,
-                    &DAYS[selected.weekday()].to_uppercase(),
+                    &wk_text,
                     weekday,
-                    12.,
+                    11.,
                     450,
                     0xffffff,
                     0.93,
@@ -181,7 +192,7 @@ impl State {
                     &format!(
                         "{:02}  {}",
                         selected.day,
-                        &DAYS[selected.weekday()][..3].to_uppercase()
+                        WEEKDAYS_SHORT[selected.weekday()]
                     ),
                     r.hero,
                     24.,
@@ -198,7 +209,7 @@ impl State {
                 }
                 self.reference_text(
                     dc,
-                    &MONTHS[i][..3],
+                    MONTHS_SHORT[i],
                     *rect,
                     if w < 360. { 7. } else { 7.5 },
                     if active { 700 } else { 450 },
@@ -221,14 +232,23 @@ impl State {
                 1.,
                 0,
             );
+            let month_line = if self.config.show_lunar {
+                format!(
+                    "{} · {}",
+                    MONTHS[selected.month as usize - 1],
+                    selected.lunar().full_label()
+                )
+            } else {
+                MONTHS[selected.month as usize - 1].to_string()
+            };
             self.reference_text(
                 dc,
-                MONTHS[selected.month as usize - 1],
+                &month_line,
                 [left[0], split, left[2], left[3]],
-                ((left[3] - split) * 0.7).clamp(13., 21.),
+                ((left[3] - split) * 0.62).clamp(11., 18.),
                 400,
                 ink,
-                0.45,
+                0.55,
                 0,
             );
             let icon_size = if hero[1] < 50. { 28. } else { 44. };
@@ -304,13 +324,13 @@ impl State {
         } else {
             format!(
                 "{} {}",
-                &MONTHS[self.cursor.month as usize - 1][..3],
+                MONTHS_SHORT[self.cursor.month as usize - 1],
                 self.cursor.year
             )
         };
         self.reference_text(dc, &nav_label, l.label, 10., 600, ink, 0.78, 0);
         c.round(l.today, 8., ink, 14, false, false);
-        self.reference_text(dc, "Today", l.today, 9., 600, ink, 0.8, 1);
+        self.reference_text(dc, "Hôm nay", l.today, 8.5, 600, ink, 0.8, 1);
 
         let weekly = mist && self.config.mist_weekly;
         if weekly {
@@ -342,22 +362,12 @@ impl State {
                 let cell = r.week_day(i);
                 rect = [cell[0], cell[1] - 24., cell[2], cell[1] - 4.];
             }
-            let label = if soft {
-                &DAYS[day][..1]
-            } else if agenda {
-                &DAYS[day][..3]
-            } else {
-                &DAYS[day][..3]
-            };
+            let label = WEEKDAYS_SHORT[day];
             self.reference_text(
                 dc,
-                &if agenda {
-                    label.to_uppercase()
-                } else {
-                    label.into()
-                },
+                label,
                 rect,
-                if agenda { 8.5 } else { 11. },
+                if agenda { 8.5 } else { 10.5 },
                 if agenda { 650 } else { 450 },
                 ink,
                 if mist { 0.84 } else { 0.44 },
@@ -399,22 +409,61 @@ impl State {
             if self.pressed == Some(action) {
                 c.round(box_rect, radius, ink, 32, false, false);
             }
-            self.reference_text(
-                dc,
-                &date.day.to_string(),
-                rect,
-                if weekly {
-                    17.
-                } else if agenda {
-                    11.
-                } else {
-                    13.
-                },
-                if current { 650 } else { 450 },
-                if current { 0xffffff } else { ink },
-                if outside && !weekly { 0.2 } else { 1. },
-                1,
-            );
+            let cell_h = box_rect[3] - box_rect[1];
+            let fg = if current { 0xffffff } else { ink };
+            let base_alpha = if outside && !weekly { 0.2 } else { 1. };
+            if self.config.show_lunar && cell_h >= 22. {
+                self.reference_text(
+                    dc,
+                    &date.day.to_string(),
+                    [box_rect[0], box_rect[1] + 1., box_rect[2], box_rect[1] + cell_h * 0.60],
+                    if weekly {
+                        14.5
+                    } else if agenda {
+                        10.
+                    } else {
+                        11.5
+                    },
+                    if current { 650 } else { 450 },
+                    fg,
+                    base_alpha,
+                    1,
+                );
+                let lunar = date.lunar();
+                self.reference_text(
+                    dc,
+                    &lunar.short_label(),
+                    [box_rect[0], box_rect[1] + cell_h * 0.54, box_rect[2], box_rect[3] - 1.],
+                    if weekly { 8. } else { 6.5 },
+                    if lunar.is_special() { 650 } else { 450 },
+                    if current {
+                        0xffffff
+                    } else if lunar.is_special() {
+                        accent
+                    } else {
+                        ink
+                    },
+                    base_alpha * if current || lunar.is_special() { 0.9 } else { 0.55 },
+                    1,
+                );
+            } else {
+                self.reference_text(
+                    dc,
+                    &date.day.to_string(),
+                    rect,
+                    if weekly {
+                        17.
+                    } else if agenda {
+                        11.
+                    } else {
+                        13.
+                    },
+                    if current { 650 } else { 450 },
+                    fg,
+                    base_alpha,
+                    1,
+                );
+            }
             if *date == self.today && !current {
                 self.artwork
                     .border(dc, self.dpi, box_rect, radius, accent, 0.7, 1.);
@@ -446,7 +495,7 @@ impl State {
             self.hwnd,
             self.dpi,
             w,
-            "Calendar",
+            "Lịch",
             ink,
             header_action(self.hover),
             header_action(self.pressed),

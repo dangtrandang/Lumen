@@ -93,7 +93,7 @@ pub(super) fn draw(
     emblem: bool,
 ) {
     let b = layout::content_box(w, h);
-    let seconds = format!("{:02} seconds", t.wSecond);
+    let seconds = format!("{:02} giây", t.wSecond);
     match cfg.theme.as_str() {
         "lumen" => draw_lumen(f, cfg, t, mode, b, date_str, &seconds, zone, progress),
         "terminal" => draw_terminal(f, cfg, t, mode, b, date_str),
@@ -214,7 +214,7 @@ fn draw_terminal(
                 let sec_sz = (sz * 0.48).clamp(16., 34.);
                 let mid_y = (b[1] + bot_y - 8.) / 2.;
                 f.text(&sec_str, [rx0, mid_y - sec_sz * 0.85, b[2], mid_y + 4.], sec_sz, false, f.accent, 2);
-                f.text("SECONDS", [rx0, mid_y + 4., b[2], mid_y + 18.], 8.5, true, f.muted, 2);
+                f.text("GIÂY", [rx0, mid_y + 4., b[2], mid_y + 18.], 8.5, true, f.muted, 2);
             } else {
                 let time_r = [b[0], b[1], b[2], (bot_y - 8.).max(b[1] + 28.)];
                 let sz = f.fit_digital(t, cfg, time_r, 92.);
@@ -231,7 +231,7 @@ fn draw_terminal(
             if cfg.show_seconds {
                 let sec_y = time_r[3] + 10.;
                 f.text(&sec_str, [b[0], sec_y, b[2], sec_y + 38.], 30., false, f.accent, 0);
-                f.text("SECONDS", [b[0], sec_y + 38., b[2], sec_y + 54.], 9.5, true, f.muted, 0);
+                f.text("GIÂY", [b[0], sec_y + 38., b[2], sec_y + 54.], 9.5, true, f.muted, 0);
             }
             f.line(&[(b[0], bot_y - 6.), (b[2], bot_y - 6.)], f.accent, 100, 1.);
             f.text(&date_str.to_uppercase(), [b[0], bot_y, b[2], b[3]], 9.5, false, f.accent, 0);
@@ -264,8 +264,8 @@ fn draw_rose(
     let bw = b[2] - b[0];
     let bh = b[3] - b[1];
     let pct = format!("{}%", (progress * 100.) as u32);
-    let min_str = format!("{} / 60 min", t.wMinute);
-    let sec_str = format!("{} / 60 sec", t.wSecond);
+    let min_str = format!("{} / 60 phút", t.wMinute);
+    let sec_str = format!("{} / 60 giây", t.wSecond);
     match mode {
         layout::Mode::Wide => {
             let split = b[0] + bw * 0.48;
@@ -279,12 +279,12 @@ fn draw_rose(
             let mh = ((bh - (count - 1) as f32 * 8.) / count as f32).clamp(20., 34.);
             let total_h = count as f32 * mh + (count - 1) as f32 * 8.;
             let mut my = (b[1] + b[3] - total_h) / 2.;
-            f.meter_in("Day elapsed", &pct, [rx0, my, b[2], my + mh], progress, 24);
+            f.meter_in("Đã qua trong ngày", &pct, [rx0, my, b[2], my + mh], progress, 24);
             my += mh + 8.;
-            f.meter_in("This hour", &min_str, [rx0, my, b[2], my + mh], t.wMinute as f32 / 60., 30);
+            f.meter_in("Giờ này", &min_str, [rx0, my, b[2], my + mh], t.wMinute as f32 / 60., 30);
             if count == 3 {
                 my += mh + 8.;
-                f.meter_in("This minute", &sec_str, [rx0, my, b[2], my + mh], t.wSecond as f32 / 60., 30);
+                f.meter_in("Phút này", &sec_str, [rx0, my, b[2], my + mh], t.wSecond as f32 / 60., 30);
             }
         }
         layout::Mode::Tall => {
@@ -293,12 +293,12 @@ fn draw_rose(
             f.digital_in(t, cfg, time_r, sz, 0);
             let mut my = time_r[3] + 14.;
             let mh = ((b[3] - my - 24.) / 3.).clamp(24., 36.);
-            f.meter_in("Day elapsed", &pct, [b[0], my, b[2], my + mh], progress, 24);
+            f.meter_in("Đã qua trong ngày", &pct, [b[0], my, b[2], my + mh], progress, 24);
             my += mh + 10.;
-            f.meter_in("This hour", &min_str, [b[0], my, b[2], my + mh], t.wMinute as f32 / 60., 30);
+            f.meter_in("Giờ này", &min_str, [b[0], my, b[2], my + mh], t.wMinute as f32 / 60., 30);
             my += mh + 10.;
             if cfg.show_seconds {
-                f.meter_in("This minute", &sec_str, [b[0], my, b[2], my + mh], t.wSecond as f32 / 60., 30);
+                f.meter_in("Phút này", &sec_str, [b[0], my, b[2], my + mh], t.wSecond as f32 / 60., 30);
             } else {
                 f.text(date_str, [b[0], my + 6., b[2], my + 24.], 10.5, false, f.muted, 0);
             }
@@ -311,12 +311,12 @@ fn draw_rose(
             let sz = f.fit_digital(t, cfg, time_r, 64.);
             f.digital_in(t, cfg, time_r, sz, 0);
             let mut my = b[3] - meters_h;
-            f.meter_in("Day elapsed", &pct, [b[0], my, b[2], my + mh], progress, 20);
+            f.meter_in("Đã qua trong ngày", &pct, [b[0], my, b[2], my + mh], progress, 20);
             my += mh + 5.;
-            f.meter_in("This hour", &min_str, [b[0], my, b[2], my + mh], t.wMinute as f32 / 60., 20);
+            f.meter_in("Giờ này", &min_str, [b[0], my, b[2], my + mh], t.wMinute as f32 / 60., 20);
             if count == 3 {
                 my += mh + 5.;
-                f.meter_in("This minute", &sec_str, [b[0], my, b[2], my + mh], t.wSecond as f32 / 60., 20);
+                f.meter_in("Phút này", &sec_str, [b[0], my, b[2], my + mh], t.wSecond as f32 / 60., 20);
             }
         }
     }
@@ -372,8 +372,8 @@ fn draw_ocean(
             let info_w = (bw * 0.25).clamp(72., 124.);
             let cards_r = b[2] - info_w - 12.;
             let cw = (cards_r - b[0] - 10.) / 2.;
-            draw_card(b[0], b[1], b[0] + cw, b[3], hour(t.wHour, cfg.hour12), "HOURS");
-            draw_card(b[0] + cw + 10., b[1], cards_r, b[3], t.wMinute, "MINUTES");
+            draw_card(b[0], b[1], b[0] + cw, b[3], hour(t.wHour, cfg.hour12), "GIỜ");
+            draw_card(b[0] + cw + 10., b[1], cards_r, b[3], t.wMinute, "PHÚT");
 
             let ix0 = cards_r + 12.;
             let dt = if info_w < 120. { short_date(date_str) } else { date_str.to_string() };
@@ -382,7 +382,7 @@ fn draw_ocean(
             if cfg.show_seconds {
                 if bh >= 105. {
                     f.meter_in(
-                        "Seconds",
+                        "Giây",
                         &format!("{:02}", t.wSecond),
                         [ix0, b[3] - 30., b[2], b[3]],
                         t.wSecond as f32 / 60.,
@@ -407,11 +407,11 @@ fn draw_ocean(
             let bot_h = if cfg.show_seconds { 36. } else { 4. };
             let avail_h = (b[3] - bot_h - (b[1] + 22.)).max(60.);
             let ch = (avail_h - 10.) / 2.;
-            draw_card(b[0], b[1] + 20., b[2], b[1] + 20. + ch, hour(t.wHour, cfg.hour12), "HOURS");
-            draw_card(b[0], b[1] + 30. + ch, b[2], b[1] + 30. + 2. * ch, t.wMinute, "MINUTES");
+            draw_card(b[0], b[1] + 20., b[2], b[1] + 20. + ch, hour(t.wHour, cfg.hour12), "GIỜ");
+            draw_card(b[0], b[1] + 30. + ch, b[2], b[1] + 30. + 2. * ch, t.wMinute, "PHÚT");
             if cfg.show_seconds {
                 f.meter_in(
-                    "Seconds",
+                    "Giây",
                     &format!("{:02}", t.wSecond),
                     [b[0], b[3] - 28., b[2], b[3]],
                     t.wSecond as f32 / 60.,
@@ -433,11 +433,11 @@ fn draw_ocean(
             let card_top = b[1] + 18.;
             let card_bot = (b[3] - bot_h - 4.).max(card_top + 40.);
             let cw = (bw - 8.) / 2.;
-            draw_card(b[0], card_top, b[0] + cw, card_bot, hour(t.wHour, cfg.hour12), "HOURS");
-            draw_card(b[0] + cw + 8., card_top, b[2], card_bot, t.wMinute, "MINUTES");
+            draw_card(b[0], card_top, b[0] + cw, card_bot, hour(t.wHour, cfg.hour12), "GIỜ");
+            draw_card(b[0] + cw + 8., card_top, b[2], card_bot, t.wMinute, "PHÚT");
             if cfg.show_seconds && bh >= 120. {
                 f.meter_in(
-                    "Seconds",
+                    "Giây",
                     &format!("{:02}", t.wSecond),
                     [b[0], b[3] - 26., b[2], b[3]],
                     t.wSecond as f32 / 60.,
@@ -445,7 +445,7 @@ fn draw_ocean(
                 );
             } else if cfg.show_seconds {
                 f.text(
-                    &format!("{:02} SEC", t.wSecond),
+                    &format!("{:02} GIÂY", t.wSecond),
                     [b[0], b[3] - 14., b[2], b[3]],
                     8.5,
                     true,
@@ -468,9 +468,9 @@ fn draw_aurora(
     let bw = b[2] - b[0];
     let bh = b[3] - b[1];
     let now_lbl = if cfg.show_seconds {
-        format!("NOW · {:02}s", t.wSecond)
+        format!("HIỆN TẠI · {:02}s", t.wSecond)
     } else {
-        "NOW".into()
+        "HIỆN TẠI".into()
     };
     let draw_timeline = |rx0: f32, ry0: f32, rx1: f32, ry1: f32, five: bool| {
         let offsets: &[i32] = if five { &[-2, -1, 0, 1, 2] } else { &[-1, 0, 1] };
@@ -495,7 +495,7 @@ fn draw_aurora(
                 );
                 f.text(&htxt, [line_x + 14., cy - 10., rx1 - 48., cy + 10.], 12., false, f.muted, 0);
                 f.text(
-                    &format!("{}h {}", offset.abs(), if *offset < 0 { "ago" } else { "ahead" }),
+                    &format!("{}g {}", offset.abs(), if *offset < 0 { "trước" } else { "tới" }),
                     [rx1 - 52., cy - 8., rx1, cy + 8.],
                     8.5,
                     false,
@@ -552,7 +552,7 @@ fn draw_aurora(
                         0,
                     );
                     f.text(
-                        &format!("{}h {}", offset.abs(), if *offset < 0 { "ago" } else { "ahead" }),
+                        &format!("{}g {}", offset.abs(), if *offset < 0 { "trước" } else { "tới" }),
                         [b[2] - 50., y + 2., b[2], y + 20.],
                         9.,
                         false,
@@ -567,10 +567,10 @@ fn draw_aurora(
             let time_r = [b[0], b[1] + 18., b[2], (b[3] - 36.).max(b[1] + 46.)];
             let prev_h = ((t.wHour as i32 + 23) % 24) as u16;
             let next_h = ((t.wHour as i32 + 1) % 24) as u16;
-            f.text(&format!("{:02}:00 · 1h ago", hour(prev_h, cfg.hour12)), [b[0], b[1], b[2], b[1] + 16.], 9.5, false, f.muted, 0);
+            f.text(&format!("{:02}:00 · 1g trước", hour(prev_h, cfg.hour12)), [b[0], b[1], b[2], b[1] + 16.], 9.5, false, f.muted, 0);
             let sz = f.fit_digital(t, cfg, time_r, 56.);
             f.digital_in(t, cfg, time_r, sz, 0);
-            f.text(&format!("{:02}:00 · 1h ahead", hour(next_h, cfg.hour12)), [b[0], b[3] - 34., b[2], b[3] - 18.], 9.5, false, f.muted, 0);
+            f.text(&format!("{:02}:00 · 1g tới", hour(next_h, cfg.hour12)), [b[0], b[3] - 34., b[2], b[3] - 18.], 9.5, false, f.muted, 0);
             f.text(date_str, [b[0], b[3] - 16., b[2], b[3]], 9., false, f.muted, 0);
         }
     }
@@ -619,7 +619,7 @@ fn draw_neon(
             draw_ring(cx, cy, ring_r);
             let pct_sz = (ring_r * 0.44).clamp(11., 24.);
             f.text(&pct_str, [cx - ring_r * 0.75, cy - pct_sz * 0.75, cx + ring_r * 0.75, cy + pct_sz * 0.35], pct_sz, true, f.ink, 1);
-            f.text("OF DAY", [cx - ring_r * 0.75, cy + pct_sz * 0.3, cx + ring_r * 0.75, cy + pct_sz * 0.85], (ring_r * 0.16).clamp(6.5, 9.), true, f.accent, 1);
+            f.text("TRONG NGÀY", [cx - ring_r * 0.75, cy + pct_sz * 0.3, cx + ring_r * 0.75, cy + pct_sz * 0.85], (ring_r * 0.16).clamp(6.5, 9.), true, f.accent, 1);
 
             let lx1 = cx - ring_r - 16.;
             f.text(date_str, [b[0], b[1], lx1, b[1] + 16.], 10., true, f.muted, 0);
@@ -627,9 +627,9 @@ fn draw_neon(
             let sz = f.fit_digital(t, cfg, time_r, 76.);
             f.digital_in(t, cfg, time_r, sz, 0);
             let bot = if cfg.show_seconds {
-                format!("{} · {}% OF THE DAY", seconds.to_uppercase(), (progress * 100.) as u32)
+                format!("{} · {}% TRONG NGÀY", seconds.to_uppercase(), (progress * 100.) as u32)
             } else {
-                format!("{}% OF THE DAY", (progress * 100.) as u32)
+                format!("{}% TRONG NGÀY", (progress * 100.) as u32)
             };
             f.text(&bot, [b[0], b[3] - 16., lx1, b[3]], 8.5, true, f.accent, 0);
         }
@@ -640,7 +640,7 @@ fn draw_neon(
             draw_ring(cx, cy, ring_r);
             let pct_sz = (ring_r * 0.44).clamp(11., 24.);
             f.text(&pct_str, [cx - ring_r * 0.75, cy - pct_sz * 0.75, cx + ring_r * 0.75, cy + pct_sz * 0.35], pct_sz, true, f.ink, 1);
-            f.text("OF DAY", [cx - ring_r * 0.75, cy + pct_sz * 0.3, cx + ring_r * 0.75, cy + pct_sz * 0.85], 8., true, f.accent, 1);
+            f.text("TRONG NGÀY", [cx - ring_r * 0.75, cy + pct_sz * 0.3, cx + ring_r * 0.75, cy + pct_sz * 0.85], 8., true, f.accent, 1);
 
             let time_top = cy + ring_r + 14.;
             let time_r = [b[0], time_top, b[2], (b[3] - 40.).max(time_top + 28.)];
@@ -662,7 +662,7 @@ fn draw_neon(
             f.digital_in(t, cfg, time_r, sz, 1);
             if ring_r >= 58. {
                 f.text(date_str, [cx - ring_r * 0.65, cy - ring_r * 0.62, cx + ring_r * 0.65, cy - ring_r * 0.38], 8.5, true, f.muted, 1);
-                f.text(&format!("{}% OF DAY", (progress * 100.) as u32), [cx - ring_r * 0.65, cy + ring_r * 0.38, cx + ring_r * 0.65, cy + ring_r * 0.62], 8., true, f.accent, 1);
+                f.text(&format!("{}% TRONG NGÀY", (progress * 100.) as u32), [cx - ring_r * 0.65, cy + ring_r * 0.38, cx + ring_r * 0.65, cy + ring_r * 0.62], 8., true, f.accent, 1);
             } else {
                 f.text(&pct_str, [cx - ring_r * 0.5, cy + ring_r * 0.34, cx + ring_r * 0.5, cy + ring_r * 0.64], 8.5, true, f.accent, 1);
             }

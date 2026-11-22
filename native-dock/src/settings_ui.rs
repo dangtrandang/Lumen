@@ -837,7 +837,7 @@ impl State {
                             false,
                             false,
                         );
-                        c.text("Settings", settings, 10., false, white, 1);
+                        c.text("Cài đặt", settings, 10., false, white, 1);
                         hits.push(Hit {
                             rect: settings,
                             target: Target::Button(*settings_id),
@@ -1500,9 +1500,9 @@ fn widget_preview(c: &Canvas, r: [f32; 4], label: &str, dpi: f32, ink: u32) {
     };
     crate::surface::swatch(c, r, 14., key, dpi);
     let at = |x: f32, y: f32, w: f32, h: f32| [r[0] + x, r[1] + y, r[0] + x + w, r[1] + y + h];
-    if name.contains("clock") {
+    if name.contains("clock") || name.contains("đồng hồ") {
         c.text(
-            "MAKE TIME FOR TODAY",
+            "HÔM NAY LÀ CỦA BẠN",
             at(9., 10., 94., 10.),
             4.5,
             true,
@@ -1511,15 +1511,15 @@ fn widget_preview(c: &Canvas, r: [f32; 4], label: &str, dpi: f32, ink: u32) {
         );
         c.text("10:08", at(10., 24., 92., 36.), 27., false, ink, 0);
         c.text(
-            "Monday, November 9",
+            "Thứ Hai, 9 Tháng 11",
             at(10., 65., 92., 12.),
             6.,
             true,
             ink,
             0,
         );
-    } else if name.contains("calendar") {
-        c.text("November 2026", at(10., 8., 92., 13.), 7., true, ink, 0);
+    } else if name.contains("calendar") || name.contains("lịch") {
+        c.text("Tháng 11 2026", at(10., 8., 92., 13.), 7., true, ink, 0);
         for i in 0..28 {
             let x = 10. + (i % 7) as f32 * 13.;
             let y = 26. + (i / 7) as f32 * 13.;
@@ -1539,7 +1539,7 @@ fn widget_preview(c: &Canvas, r: [f32; 4], label: &str, dpi: f32, ink: u32) {
         c.text("♪", at(33., 13., 46., 46.), 25., false, ink, 1);
         c.round(at(10., 68., 92., 13.), 6., ink, 35, false, false);
         c.text("‹     ▶     ›", at(10., 68., 92., 13.), 9., true, ink, 1);
-    } else if name.contains("note") {
+    } else if name.contains("note") || name.contains("ghi chú") {
         c.round(at(9., 9., 94., 11.), 5., ink, 20, false, false);
         for (y, color) in [(27., 0xc99365), (56., 0x9b83c4)] {
             c.round(at(9., y, 94., 25.), 7., color, 150, false, false);
@@ -1551,7 +1551,7 @@ fn widget_preview(c: &Canvas, r: [f32; 4], label: &str, dpi: f32, ink: u32) {
                 1.,
             );
         }
-    } else if name.contains("control") {
+    } else if name.contains("control") || name.contains("điều khiển") {
         for i in 0..4 {
             let x = 9. + (i % 2) as f32 * 49.;
             let y = 9. + (i / 2) as f32 * 35.;
@@ -1569,7 +1569,7 @@ fn widget_preview(c: &Canvas, r: [f32; 4], label: &str, dpi: f32, ink: u32) {
         }
     } else {
         c.round(at(8., 8., 96., 14.), 7., 0, 50, false, false);
-        c.text("Search apps…", at(14., 8., 83., 14.), 5.5, false, ink, 0);
+        c.text("Tìm ứng dụng…", at(14., 8., 83., 14.), 5.5, false, ink, 0);
         for i in 0..8 {
             let x = 12. + (i % 4) as f32 * 24.;
             let y = 30. + (i / 4) as f32 * 26.;

@@ -1299,46 +1299,46 @@ unsafe fn auto_watch_and_route(shared: &Rc<RefCell<SharedState>>, force_existing
 
 unsafe fn build_fences_settings_rows(config: &FencesConfig) -> Vec<crate::settings_ui::Row> {
     let mut rows = vec![
-        crate::settings_ui::Row::section("GLOBAL AUTO-ROUTE"),
+        crate::settings_ui::Row::section("TỰ ĐỘNG PHÂN LOẠI TỆP"),
         crate::settings_ui::Row::toggle(
             1,
-            "Auto-Route Rules (Desktop & Downloads)",
-            "Automatically sort newly downloaded or added files into matching Fences",
+            "Bật tự động phân loại (Desktop & Downloads)",
+            "Tự động chuyển tệp mới tải về hoặc mới thêm trên màn hình vào Khung tương ứng",
             config.rules_enabled,
         ),
         crate::settings_ui::Row::toggle(
             2,
-            "Watch Windows Downloads Folder",
-            "Route newly downloaded images, installers & files from Downloads into Fences",
+            "Theo dõi thư mục Downloads (Tải xuống)",
+            "Tự phân loại ảnh, phần mềm cài đặt & tệp tải về từ thư mục Downloads",
             config.watch_downloads,
         ),
         crate::settings_ui::Row::accent_button(
             3,
-            "Run Auto-Route Rules Now on Desktop & Downloads",
+            "Chạy phân loại ngay trên Desktop & Downloads",
             0x4f8cff,
         ),
         crate::settings_ui::Row::button(
             4,
-            "Reset Default 3 Rules (Images, PC Programs, Downloads)",
+            "Khôi phục 3 Quy tắc mặc định (Images, PC Programs, Downloads)",
         ),
-        crate::settings_ui::Row::section("FENCE RULES & EXTENSIONS"),
+        crate::settings_ui::Row::section("QUY TẮC & ĐUÔI TỆP TỪNG KHUNG"),
     ];
     for (i, f) in config.fences.iter().enumerate() {
         let base_id = 100 + (i as u32) * 10;
         let rule_summary = if f.auto_rule_exts.trim().is_empty() {
-            "No rule extensions configured".to_string()
+            "Chưa thiết lập đuôi tệp".to_string()
         } else {
-            format!("Extensions: {}", f.auto_rule_exts)
+            format!("Đuôi tệp: {}", f.auto_rule_exts)
         };
         rows.push(crate::settings_ui::Row::toggle(
             base_id,
-            format!("Rule: {}", f.title),
+            format!("Quy tắc: {}", f.title),
             rule_summary,
             f.auto_rule_enabled && !f.auto_rule_exts.trim().is_empty(),
         ));
         rows.push(crate::settings_ui::Row::button(
             base_id + 1,
-            format!("Edit \"{}\" Rule Extensions...", f.title),
+            format!("Sửa đuôi tệp của \"{}\"...", f.title),
         ));
     }
     rows
@@ -1365,8 +1365,8 @@ unsafe fn open_fences_settings(shared: &Rc<RefCell<SharedState>>) {
     if sh.settings_ui.is_none() {
         sh.settings_ui = crate::settings_ui::Host::create(
             notify_hwnd,
-            "Desktop Fences Rules",
-            "3 Built-in Rules (Images, PC Programs, Downloads) + Custom Fence Rules",
+            "Quy tắc Khung Thư Mục (Fences)",
+            "3 Quy tắc mặc định (Images, PC Programs, Downloads) & Tùy chỉnh",
             glass,
             rows.clone(),
             FENCES_SETTINGS_CHANGED,
@@ -1456,7 +1456,7 @@ unsafe fn handle_fences_settings_changed(shared: &Rc<RefCell<SharedState>>) {
     }
 
     if let Some((idx, title, current_exts)) = edit_idx {
-        let prompt_title = format!("Rule Extensions for \"{title}\" (comma-separated)");
+        let prompt_title = format!("Đuôi tệp cho \"{title}\" (ngăn cách bằng dấu phẩy)");
         if let Some(updated) = crate::text_prompt::choose(prompt_owner, &prompt_title, &current_exts) {
             if let Ok(mut sh) = shared.try_borrow_mut() {
                 if let Some(f) = sh.config.fences.get_mut(idx) {
@@ -2588,7 +2588,7 @@ unsafe fn execute_menu_command(win: &RefCell<FenceWindow>, cmd: usize) {
                 .ok()
                 .and_then(|b| b.spec().map(|s| (b.hwnd, s.title, s.auto_rule_exts)));
             if let Some((hwnd, title, cur_exts)) = info {
-                let prompt = format!("Auto-Route Extensions for \"{title}\" (comma-separated)");
+                let prompt = format!("Đuôi tệp tự phân loại cho \"{title}\" (cách nhau dấu phẩy)");
                 if let Some(updated) = crate::text_prompt::choose(hwnd, &prompt, &cur_exts) {
                     if let Ok(mut b) = win.try_borrow_mut() {
                         let cleaned = updated.trim().to_string();
@@ -2626,12 +2626,12 @@ unsafe fn run_add_menu(win: &RefCell<FenceWindow>, sx: i32, sy: i32) {
     if menu.is_null() {
         return;
     }
-    AppendMenuW(menu, MF_STRING, CMD_ADD_FILES, wide("Add Program / App / File...").as_ptr());
-    AppendMenuW(menu, MF_STRING, CMD_ADD_FOLDER_LINK, wide("Add Folder Shortcut...").as_ptr());
-    AppendMenuW(menu, MF_STRING, CMD_MOVE_FOLDER_IN, wide("Move Folder into This Fence...").as_ptr());
-    AppendMenuW(menu, MF_STRING, CMD_NEW_SUBFOLDER, wide("New Subfolder").as_ptr());
+    AppendMenuW(menu, MF_STRING, CMD_ADD_FILES, wide("Thêm Chương trình / Ứng dụng / Tệp...").as_ptr());
+    AppendMenuW(menu, MF_STRING, CMD_ADD_FOLDER_LINK, wide("Thêm Lối tắt Thư mục...").as_ptr());
+    AppendMenuW(menu, MF_STRING, CMD_MOVE_FOLDER_IN, wide("Di chuyển Thư mục vào Khung này...").as_ptr());
+    AppendMenuW(menu, MF_STRING, CMD_NEW_SUBFOLDER, wide("Tạo Thư mục con mới").as_ptr());
     AppendMenuW(menu, MF_SEPARATOR, 0, null());
-    AppendMenuW(menu, MF_STRING, CMD_NEW_FENCE_FROM_FOLDER, wide("Create New Fence from Folder...").as_ptr());
+    AppendMenuW(menu, MF_STRING, CMD_NEW_FENCE_FROM_FOLDER, wide("Tạo Khung mới từ Thư mục...").as_ptr());
 
     SetForegroundWindow(hwnd);
     let cmd = TrackPopupMenu(
@@ -2698,9 +2698,9 @@ unsafe fn run_context_menu(win: &RefCell<FenceWindow>, mut sx: i32, mut sy: i32)
 
     let rule_active = spec.auto_rule_enabled && !spec.auto_rule_exts.trim().is_empty();
     let rule_toggle_label = if rule_active {
-        format!("Enable Auto-Route Rule ({})", spec.auto_rule_exts)
+        format!("Bật tự động phân loại ({})", spec.auto_rule_exts)
     } else {
-        "Enable Auto-Route Rule for This Fence".to_string()
+        "Bật tự động phân loại cho Khung này".to_string()
     };
     AppendMenuW(rule_menu, flag(rule_active), CMD_RULE_TOGGLE, wide(&rule_toggle_label).as_ptr());
     AppendMenuW(rule_menu, MF_SEPARATOR, 0, null());
@@ -2708,98 +2708,98 @@ unsafe fn run_context_menu(win: &RefCell<FenceWindow>, mut sx: i32, mut sy: i32)
         rule_menu,
         flag(spec.auto_rule_enabled && spec.auto_rule_exts == model::RULE_EXTS_IMAGES),
         CMD_RULE_PRESET_IMAGES,
-        wide("Preset: Images (png, jpg, webp, gif, svg...)").as_ptr(),
+        wide("Mẫu: Hình ảnh (png, jpg, webp, gif, svg...)").as_ptr(),
     );
     AppendMenuW(
         rule_menu,
         flag(spec.auto_rule_enabled && spec.auto_rule_exts == model::RULE_EXTS_PROGRAMS),
         CMD_RULE_PRESET_PROGRAMS,
-        wide("Preset: PC Programs (exe, msi, lnk, bat...)").as_ptr(),
+        wide("Mẫu: Chương trình PC (exe, msi, lnk, bat...)").as_ptr(),
     );
     AppendMenuW(
         rule_menu,
         flag(spec.auto_rule_enabled && spec.auto_rule_exts == model::RULE_EXTS_DOWNLOADS),
         CMD_RULE_PRESET_DOWNLOADS,
-        wide("Preset: Downloads (zip, rar, pdf, docx, mp4...)").as_ptr(),
+        wide("Mẫu: Tải xuống (zip, rar, pdf, docx, mp4...)").as_ptr(),
     );
     AppendMenuW(rule_menu, MF_SEPARATOR, 0, null());
-    AppendMenuW(rule_menu, MF_STRING, CMD_RULE_EDIT_EXTS, wide("Custom Extensions...").as_ptr());
-    AppendMenuW(rule_menu, MF_STRING, CMD_RULE_RUN_NOW, wide("Run Auto-Route Rules Now").as_ptr());
-    AppendMenuW(rule_menu, MF_STRING, CMD_RULE_OPEN_SETTINGS, wide("All Fence Rules Settings...").as_ptr());
+    AppendMenuW(rule_menu, MF_STRING, CMD_RULE_EDIT_EXTS, wide("Tùy chỉnh đuôi tệp...").as_ptr());
+    AppendMenuW(rule_menu, MF_STRING, CMD_RULE_RUN_NOW, wide("Chạy tự động phân loại ngay").as_ptr());
+    AppendMenuW(rule_menu, MF_STRING, CMD_RULE_OPEN_SETTINGS, wide("Cài đặt tất cả Quy tắc...").as_ptr());
 
-    AppendMenuW(add_menu, MF_STRING, CMD_ADD_FILES, wide("Add Program / App / File...").as_ptr());
-    AppendMenuW(add_menu, MF_STRING, CMD_ADD_FOLDER_LINK, wide("Add Folder Shortcut...").as_ptr());
-    AppendMenuW(add_menu, MF_STRING, CMD_MOVE_FOLDER_IN, wide("Move Folder into This Fence...").as_ptr());
-    AppendMenuW(add_menu, MF_STRING, CMD_NEW_SUBFOLDER, wide("New Subfolder").as_ptr());
+    AppendMenuW(add_menu, MF_STRING, CMD_ADD_FILES, wide("Thêm Chương trình / Ứng dụng / Tệp...").as_ptr());
+    AppendMenuW(add_menu, MF_STRING, CMD_ADD_FOLDER_LINK, wide("Thêm Lối tắt Thư mục...").as_ptr());
+    AppendMenuW(add_menu, MF_STRING, CMD_MOVE_FOLDER_IN, wide("Di chuyển Thư mục vào Khung này...").as_ptr());
+    AppendMenuW(add_menu, MF_STRING, CMD_NEW_SUBFOLDER, wide("Tạo Thư mục con mới").as_ptr());
     AppendMenuW(add_menu, MF_SEPARATOR, 0, null());
-    AppendMenuW(add_menu, MF_STRING, CMD_NEW_FENCE_FROM_FOLDER, wide("Create New Fence from Folder...").as_ptr());
+    AppendMenuW(add_menu, MF_STRING, CMD_NEW_FENCE_FROM_FOLDER, wide("Tạo Khung mới từ Thư mục...").as_ptr());
 
     let op_pct = (spec.idle_opacity * 100.0).round() as i32;
-    AppendMenuW(op_menu, flag(spec.fade_on_hover && op_pct <= 8), CMD_OP_5, wide("5% (Nearly Hidden)").as_ptr());
-    AppendMenuW(op_menu, flag(spec.fade_on_hover && op_pct > 8 && op_pct <= 20), CMD_OP_15, wide("15% (Subtle)").as_ptr());
-    AppendMenuW(op_menu, flag(spec.fade_on_hover && op_pct > 20 && op_pct <= 35), CMD_OP_25, wide("25% (Dim)").as_ptr());
-    AppendMenuW(op_menu, flag(spec.fade_on_hover && op_pct > 35 && op_pct < 99), CMD_OP_50, wide("50% (Half)").as_ptr());
-    AppendMenuW(op_menu, flag(!spec.fade_on_hover || op_pct >= 99), CMD_OP_100, wide("100% (Always Clear)").as_ptr());
+    AppendMenuW(op_menu, flag(spec.fade_on_hover && op_pct <= 8), CMD_OP_5, wide("5% (Gần như ẩn)").as_ptr());
+    AppendMenuW(op_menu, flag(spec.fade_on_hover && op_pct > 8 && op_pct <= 20), CMD_OP_15, wide("15% (Mờ nhẹ)").as_ptr());
+    AppendMenuW(op_menu, flag(spec.fade_on_hover && op_pct > 20 && op_pct <= 35), CMD_OP_25, wide("25% (Mờ vừa)").as_ptr());
+    AppendMenuW(op_menu, flag(spec.fade_on_hover && op_pct > 35 && op_pct < 99), CMD_OP_50, wide("50% (Một nửa)").as_ptr());
+    AppendMenuW(op_menu, flag(!spec.fade_on_hover || op_pct >= 99), CMD_OP_100, wide("100% (Luôn rõ)").as_ptr());
 
-    AppendMenuW(view_menu, flag(spec.view_mode == "grid" || spec.view_mode.is_empty()), CMD_VIEW_GRID, wide("Standard Grid").as_ptr());
-    AppendMenuW(view_menu, flag(spec.view_mode == "gallery"), CMD_VIEW_GALLERY, wide("Photo Gallery (Large Images)").as_ptr());
-    AppendMenuW(view_menu, flag(spec.view_mode == "compact"), CMD_VIEW_COMPACT, wide("Compact Tiles").as_ptr());
+    AppendMenuW(view_menu, flag(spec.view_mode == "grid" || spec.view_mode.is_empty()), CMD_VIEW_GRID, wide("Lưới tiêu chuẩn").as_ptr());
+    AppendMenuW(view_menu, flag(spec.view_mode == "gallery"), CMD_VIEW_GALLERY, wide("Thư viện ảnh (Ảnh lớn)").as_ptr());
+    AppendMenuW(view_menu, flag(spec.view_mode == "compact"), CMD_VIEW_COMPACT, wide("Ô thu gọn").as_ptr());
     AppendMenuW(view_menu, MF_SEPARATOR, 0, null());
-    AppendMenuW(view_menu, flag(spec.show_thumbnails), CMD_TOGGLE_THUMBS, wide("Show Image Thumbnails").as_ptr());
+    AppendMenuW(view_menu, flag(spec.show_thumbnails), CMD_TOGGLE_THUMBS, wide("Hiện ảnh thu nhỏ (Thumbnails)").as_ptr());
 
-    AppendMenuW(icon_menu, flag(spec.icon_size <= 26), CMD_ICON_24, wide("Small (24px)").as_ptr());
-    AppendMenuW(icon_menu, flag(spec.icon_size > 26 && spec.icon_size < 40), CMD_ICON_32, wide("Normal (32px)").as_ptr());
-    AppendMenuW(icon_menu, flag(spec.icon_size >= 40), CMD_ICON_48, wide("Large (48px)").as_ptr());
+    AppendMenuW(icon_menu, flag(spec.icon_size <= 26), CMD_ICON_24, wide("Nhỏ (24px)").as_ptr());
+    AppendMenuW(icon_menu, flag(spec.icon_size > 26 && spec.icon_size < 40), CMD_ICON_32, wide("Vừa (32px)").as_ptr());
+    AppendMenuW(icon_menu, flag(spec.icon_size >= 40), CMD_ICON_48, wide("Lớn (48px)").as_ptr());
 
     let ts = if spec.text_size <= 0 { 13 } else { spec.text_size };
-    AppendMenuW(text_menu, flag(ts <= 9), CMD_TEXT_9, wide("Extra Small (9px)").as_ptr());
-    AppendMenuW(text_menu, flag(ts == 10), CMD_TEXT_10, wide("Compact (10px)").as_ptr());
-    AppendMenuW(text_menu, flag(ts == 11), CMD_TEXT_11, wide("Small (11px)").as_ptr());
-    AppendMenuW(text_menu, flag(ts > 11 && ts <= 13), CMD_TEXT_13, wide("Normal (13px)").as_ptr());
-    AppendMenuW(text_menu, flag(ts > 13 && ts <= 15), CMD_TEXT_15, wide("Large (15px)").as_ptr());
-    AppendMenuW(text_menu, flag(ts >= 16), CMD_TEXT_17, wide("Extra Large (17px)").as_ptr());
+    AppendMenuW(text_menu, flag(ts <= 9), CMD_TEXT_9, wide("Rất nhỏ (9px)").as_ptr());
+    AppendMenuW(text_menu, flag(ts == 10), CMD_TEXT_10, wide("Gọn (10px)").as_ptr());
+    AppendMenuW(text_menu, flag(ts == 11), CMD_TEXT_11, wide("Nhỏ (11px)").as_ptr());
+    AppendMenuW(text_menu, flag(ts > 11 && ts <= 13), CMD_TEXT_13, wide("Vừa (13px)").as_ptr());
+    AppendMenuW(text_menu, flag(ts > 13 && ts <= 15), CMD_TEXT_15, wide("Lớn (15px)").as_ptr());
+    AppendMenuW(text_menu, flag(ts >= 16), CMD_TEXT_17, wide("Rất lớn (17px)").as_ptr());
 
-    AppendMenuW(flt_menu, flag(spec.filter == "all"), CMD_FILTER_ALL, wide("Show All").as_ptr());
-    AppendMenuW(flt_menu, flag(spec.filter == "folders"), CMD_FILTER_FOLDERS, wide("Folders Only").as_ptr());
-    AppendMenuW(flt_menu, flag(spec.filter == "files"), CMD_FILTER_FILES, wide("Files & Apps Only").as_ptr());
+    AppendMenuW(flt_menu, flag(spec.filter == "all"), CMD_FILTER_ALL, wide("Hiện tất cả").as_ptr());
+    AppendMenuW(flt_menu, flag(spec.filter == "folders"), CMD_FILTER_FOLDERS, wide("Chỉ Thư mục").as_ptr());
+    AppendMenuW(flt_menu, flag(spec.filter == "files"), CMD_FILTER_FILES, wide("Chỉ Tệp & Ứng dụng").as_ptr());
     AppendMenuW(flt_menu, MF_SEPARATOR, 0, null());
-    AppendMenuW(flt_menu, flag(spec.sort_by == "name"), CMD_SORT_NAME, wide("Sort by Name").as_ptr());
-    AppendMenuW(flt_menu, flag(spec.sort_by == "date"), CMD_SORT_DATE, wide("Sort by Date (Newest First)").as_ptr());
-    AppendMenuW(flt_menu, flag(spec.sort_by == "manual"), CMD_SORT_MANUAL, wide("Manual Order (Drag Icons)").as_ptr());
-    AppendMenuW(flt_menu, flag(spec.folders_first), CMD_FOLDERS_FIRST, wide("Folders First").as_ptr());
+    AppendMenuW(flt_menu, flag(spec.sort_by == "name"), CMD_SORT_NAME, wide("Sắp xếp theo Tên").as_ptr());
+    AppendMenuW(flt_menu, flag(spec.sort_by == "date"), CMD_SORT_DATE, wide("Sắp xếp theo Ngày (Mới nhất)").as_ptr());
+    AppendMenuW(flt_menu, flag(spec.sort_by == "manual"), CMD_SORT_MANUAL, wide("Thứ tự thủ công (Kéo thả)").as_ptr());
+    AppendMenuW(flt_menu, flag(spec.folders_first), CMD_FOLDERS_FIRST, wide("Ưu tiên Thư mục lên đầu").as_ptr());
 
     if sel_count > 0 {
         let open_label = if let Some(ref name) = first_sel_name {
-            format!("Open \"{name}\"")
+            format!("Mở \"{name}\"")
         } else {
-            "Open".to_string()
+            "Mở".to_string()
         };
         let del_label = if sel_count > 1 {
-            format!("Delete Selected ({sel_count} items)")
+            format!("Xóa mục đã chọn ({sel_count} mục)")
         } else if let Some(ref name) = first_sel_name {
-            format!("Delete \"{name}\"")
+            format!("Xóa \"{name}\"")
         } else {
-            "Delete".to_string()
+            "Xóa".to_string()
         };
         AppendMenuW(menu, MF_STRING, CMD_ITEM_OPEN, wide(&open_label).as_ptr());
-        AppendMenuW(menu, MF_STRING, CMD_ITEM_REVEAL, wide("Show in Explorer").as_ptr());
+        AppendMenuW(menu, MF_STRING, CMD_ITEM_REVEAL, wide("Hiển thị trong Explorer").as_ptr());
         AppendMenuW(menu, MF_STRING, CMD_ITEM_DELETE, wide(&del_label).as_ptr());
         AppendMenuW(menu, MF_SEPARATOR, 0, null());
     }
 
-    AppendMenuW(menu, MF_POPUP, add_menu as usize, wide("Add Folder / Program (+ )").as_ptr());
-    AppendMenuW(menu, MF_POPUP, rule_menu as usize, wide("Auto-Route Rule").as_ptr());
-    AppendMenuW(menu, MF_POPUP, view_menu as usize, wide("View Mode & Thumbnails").as_ptr());
-    AppendMenuW(menu, MF_POPUP, icon_menu as usize, wide("Icon Size").as_ptr());
-    AppendMenuW(menu, MF_POPUP, text_menu as usize, wide("Tile Text Size").as_ptr());
-    AppendMenuW(menu, MF_POPUP, flt_menu as usize, wide("Filter & Sort").as_ptr());
-    AppendMenuW(menu, flag(spec.fade_on_hover), CMD_FADE, wide("Fade on Hover").as_ptr());
-    AppendMenuW(menu, MF_POPUP, op_menu as usize, wide("Idle Opacity").as_ptr());
-    AppendMenuW(menu, flag(spec.rolled_up), CMD_ROLL, wide("Roll Up to Title Bar").as_ptr());
+    AppendMenuW(menu, MF_POPUP, add_menu as usize, wide("Thêm Thư mục / Chương trình (+)").as_ptr());
+    AppendMenuW(menu, MF_POPUP, rule_menu as usize, wide("Quy tắc Tự động phân loại").as_ptr());
+    AppendMenuW(menu, MF_POPUP, view_menu as usize, wide("Chế độ xem & Ảnh thu nhỏ").as_ptr());
+    AppendMenuW(menu, MF_POPUP, icon_menu as usize, wide("Kích thước Biểu tượng").as_ptr());
+    AppendMenuW(menu, MF_POPUP, text_menu as usize, wide("Cỡ chữ Tiêu đề").as_ptr());
+    AppendMenuW(menu, MF_POPUP, flt_menu as usize, wide("Lọc & Sắp xếp").as_ptr());
+    AppendMenuW(menu, flag(spec.fade_on_hover), CMD_FADE, wide("Làm mờ khi không rê chuột").as_ptr());
+    AppendMenuW(menu, MF_POPUP, op_menu as usize, wide("Độ mờ khi nghỉ").as_ptr());
+    AppendMenuW(menu, flag(spec.rolled_up), CMD_ROLL, wide("Thu gọn lên Thanh tiêu đề").as_ptr());
     AppendMenuW(menu, MF_SEPARATOR, 0, null());
-    AppendMenuW(menu, MF_STRING, CMD_OPEN_FOLDER, wide("Open Folder in Explorer").as_ptr());
-    AppendMenuW(menu, MF_STRING, CMD_REFRESH, wide("Refresh").as_ptr());
-    AppendMenuW(menu, MF_STRING, CMD_HIDE, wide("Hide This Fence").as_ptr());
+    AppendMenuW(menu, MF_STRING, CMD_OPEN_FOLDER, wide("Mở Thư mục trong Explorer").as_ptr());
+    AppendMenuW(menu, MF_STRING, CMD_REFRESH, wide("Làm mới").as_ptr());
+    AppendMenuW(menu, MF_STRING, CMD_HIDE, wide("Ẩn Khung này").as_ptr());
 
     SetForegroundWindow(hwnd);
     let cmd = TrackPopupMenu(
