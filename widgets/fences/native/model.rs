@@ -1,6 +1,26 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+pub const RULE_EXTS_IMAGES: &str =
+    ".png, .jpg, .jpeg, .webp, .gif, .bmp, .svg, .ico, .avif, .heic, .tiff";
+pub const RULE_EXTS_PROGRAMS: &str = ".exe, .msi, .lnk, .bat, .cmd, .appref-ms";
+pub const RULE_EXTS_DOWNLOADS: &str =
+    ".zip, .rar, .7z, .tar, .gz, .pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx, .txt, .csv, .mp4, .mkv, .mp3, .wav, .flac, .apk, .iso, .torrent";
+
+pub fn default_rule_for_fence(id: &str, title: &str) -> (bool, String) {
+    let key = id.to_ascii_lowercase();
+    let t = title.to_ascii_lowercase();
+    if key == "images" || t.contains("image") || t.contains("photo") {
+        (true, RULE_EXTS_IMAGES.into())
+    } else if key == "pc-programs" || t.contains("program") || t.contains("app") {
+        (true, RULE_EXTS_PROGRAMS.into())
+    } else if key == "downloads" || t.contains("download") {
+        (true, RULE_EXTS_DOWNLOADS.into())
+    } else {
+        (false, String::new())
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct FenceSpec {
@@ -22,6 +42,8 @@ pub struct FenceSpec {
     pub filter: String,
     pub folders_first: bool,
     pub visible: bool,
+    pub auto_rule_enabled: bool,
+    pub auto_rule_exts: String,
 }
 
 impl Default for FenceSpec {
@@ -45,6 +67,8 @@ impl Default for FenceSpec {
             filter: "all".into(),
             folders_first: true,
             visible: true,
+            auto_rule_enabled: false,
+            auto_rule_exts: String::new(),
         }
     }
 }
@@ -53,6 +77,9 @@ impl Default for FenceSpec {
 #[serde(default, rename_all = "camelCase")]
 pub struct FencesConfig {
     pub open: bool,
+    pub rules_enabled: bool,
+    pub watch_downloads: bool,
+    pub rules_initialized: bool,
     pub fences: Vec<FenceSpec>,
 }
 
@@ -60,12 +87,15 @@ impl Default for FencesConfig {
     fn default() -> Self {
         Self {
             open: true,
+            rules_enabled: true,
+            watch_downloads: true,
+            rules_initialized: true,
             fences: default_fences(),
         }
     }
 }
 
-fn user_home() -> PathBuf {
+pub fn user_home() -> PathBuf {
     std::env::var_os("USERPROFILE")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(r"C:\Users\Public"))
@@ -89,6 +119,7 @@ fn default_fences() -> Vec<FenceSpec> {
     for (id, title, path, pos, size, fade, sort_by, sort_desc) in candidates {
         if path.is_dir() {
             let is_img = id == "images";
+            let (auto_rule_enabled, auto_rule_exts) = default_rule_for_fence(id, title);
             out.push(FenceSpec {
                 id: id.into(),
                 title: title.into(),
@@ -108,6 +139,8 @@ fn default_fences() -> Vec<FenceSpec> {
                 filter: "all".into(),
                 folders_first: true,
                 visible: true,
+                auto_rule_enabled,
+                auto_rule_exts,
             });
         }
     }
@@ -131,6 +164,8 @@ fn default_fences() -> Vec<FenceSpec> {
             filter: "all".into(),
             folders_first: true,
             visible: true,
+            auto_rule_enabled: false,
+            auto_rule_exts: String::new(),
         });
     }
     out
@@ -144,7 +179,22 @@ impl FencesConfig {
     pub fn load(root: &Path) -> Self {
         let path = Self::path(root);
         if let Ok(bytes) = std::fs::read(&path) {
-            if let Ok(cfg) = serde_json::from_slice::<Self>(&bytes) {
+            if let Ok(mut cfg) = serde_json::from_slice::<Self>(&bytes) {
+                if !cfg.rules_initialized {
+                    cfg.rules_initialized = true;
+                    cfg.rules_enabled = true;
+                    cfg.watch_downloads = true;
+                    for f in &mut cfg.fences {
+                        if f.auto_rule_exts.trim().is_empty() {
+                            let (en, exts) = default_rule_for_fence(&f.id, &f.title);
+                            if en {
+                                f.auto_rule_enabled = true;
+                                f.auto_rule_exts = exts;
+                            }
+                        }
+                    }
+                    let _ = cfg.save(root);
+                }
                 return cfg;
             }
         }

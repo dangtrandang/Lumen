@@ -13,6 +13,7 @@ use model::{FenceSpec, FencesConfig};
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
+    fs,
     mem::{size_of, zeroed},
     path::{Path, PathBuf},
     ptr::{null, null_mut},
@@ -59,8 +60,10 @@ use windows_sys::Win32::{
 
 const CLASS: &str = "LumenNativeFenceWindow";
 const MARQUEE_CLASS: &str = "LumenDesktopMarqueeOverlay";
+const DRAG_GHOST_CLASS: &str = "LumenFenceDragGhostOverlay";
 const FADE_TIMER: usize = 201;
 const ZORDER_WATCH_TIMER: usize = 202;
+const FENCES_SETTINGS_CHANGED: u32 = WM_APP + 195;
 const EASE: [f32; 4] = [0.25, 0.1, 0.25, 1.0];
 const HEADER_H: f32 = 34.0;
 const RADIUS: f32 = 18.0;
@@ -112,6 +115,14 @@ const CMD_NEW_FENCE_FROM_FOLDER: usize = 1064;
 const CMD_ITEM_OPEN: usize = 1070;
 const CMD_ITEM_REVEAL: usize = 1071;
 const CMD_ITEM_DELETE: usize = 1072;
+
+const CMD_RULE_TOGGLE: usize = 1080;
+const CMD_RULE_PRESET_IMAGES: usize = 1081;
+const CMD_RULE_PRESET_PROGRAMS: usize = 1082;
+const CMD_RULE_PRESET_DOWNLOADS: usize = 1083;
+const CMD_RULE_EDIT_EXTS: usize = 1084;
+const CMD_RULE_RUN_NOW: usize = 1085;
+const CMD_RULE_OPEN_SETTINGS: usize = 1086;
 
 fn cell_dims(spec: &FenceSpec) -> (f32, f32, f32) {
     let base_icon = match spec.view_mode.as_str() {
@@ -604,6 +615,13 @@ struct SharedState {
     last_desk_click_pt: [i32; 2],
     desk_drag_start: Option<[i32; 2]>,
     marquee_hwnd: HWND,
+    drag_ghost_hwnd: HWND,
+    drag_ghost_buf: Option<Buffer>,
+    settings_ui: Option<crate::settings_ui::Host>,
+    watch_baseline: SystemTime,
+    watch_tick: u32,
+    folder_sigs: HashMap<String, u64>,
+    routed_files: HashSet<PathBuf>,
     windows: Vec<Rc<RefCell<FenceWindow>>>,
 }
 
@@ -696,6 +714,11 @@ impl Host {
             crate::fusion::set_marquee_overlay(mh);
             mh
         };
+        let drag_ghost_hwnd = if smoke {
+            null_mut()
+        } else {
+            create_drag_ghost_overlay()
+        };
         let shared = Rc::new(RefCell::new(SharedState {
             root: root.into(),
             config: config.clone(),
@@ -707,6 +730,13 @@ impl Host {
             last_desk_click_pt: [0, 0],
             desk_drag_start: None,
             marquee_hwnd,
+            drag_ghost_hwnd,
+            drag_ghost_buf: None,
+            settings_ui: None,
+            watch_baseline: SystemTime::now(),
+            watch_tick: 0,
+            folder_sigs: HashMap::new(),
+            routed_files: HashSet::new(),
             windows: Vec::new(),
         }));
         let mut windows = Vec::new();
@@ -734,6 +764,10 @@ impl Host {
         check_and_repair_zorder(&self.shared);
     }
 
+    pub unsafe fn show_settings(&mut self) {
+        open_fences_settings(&self.shared);
+    }
+
     pub unsafe fn show(&mut self) {
         self.shared.borrow_mut().config.open = true;
         let root = self.shared.borrow().root.clone();
@@ -755,6 +789,10 @@ impl Host {
         let mhwnd = self.shared.borrow().marquee_hwnd;
         if !mhwnd.is_null() {
             ShowWindow(mhwnd, SW_HIDE);
+        }
+        let ghwnd = self.shared.borrow().drag_ghost_hwnd;
+        if !ghwnd.is_null() {
+            ShowWindow(ghwnd, SW_HIDE);
         }
         let wins = self.shared.borrow().windows.clone();
         for w in wins {
@@ -904,6 +942,546 @@ unsafe fn check_and_repair_zorder(shared: &Rc<RefCell<SharedState>>) {
     }
     if crate::desktop_layer::repair_if_below_desktop() {
         log_zorder_snapshot("watch-repaired-win-d", shared);
+    }
+    let should_watch = {
+        let Ok(mut sh) = shared.try_borrow_mut() else {
+            return;
+        };
+        sh.watch_tick = sh.watch_tick.wrapping_add(1);
+        sh.watch_tick % 10 == 0
+    };
+    if should_watch {
+        auto_watch_and_route(shared, false);
+    }
+}
+
+unsafe fn create_drag_ghost_overlay() -> HWND {
+    let class = wide(DRAG_GHOST_CLASS);
+    let instance = GetModuleHandleW(null());
+    let wc = WNDCLASSW {
+        lpfnWndProc: Some(DefWindowProcW),
+        hInstance: instance,
+        hCursor: LoadCursorW(null_mut(), IDC_ARROW),
+        lpszClassName: class.as_ptr(),
+        ..zeroed()
+    };
+    let _ = RegisterClassW(&wc);
+    CreateWindowExW(
+        WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+        class.as_ptr(),
+        wide("").as_ptr(),
+        WS_POPUP,
+        0,
+        0,
+        1,
+        1,
+        null_mut(),
+        null_mut(),
+        instance,
+        null(),
+    )
+}
+
+unsafe fn hide_drag_ghost(shared: &Rc<RefCell<SharedState>>) {
+    let ghwnd = shared.try_borrow().map(|s| s.drag_ghost_hwnd).unwrap_or(null_mut());
+    if !ghwnd.is_null() {
+        ShowWindow(ghwnd, SW_HIDE);
+    }
+}
+
+unsafe fn update_drag_ghost(win: &mut FenceWindow, idrag: ItemDrag, screen_pt: POINT, dpi: f32) {
+    let ghost_hwnd = win
+        .shared
+        .try_borrow()
+        .map(|s| s.drag_ghost_hwnd)
+        .unwrap_or(null_mut());
+    if ghost_hwnd.is_null() || idrag.idx >= win.entries.len() {
+        return;
+    }
+    let Some(spec) = win.spec() else {
+        return;
+    };
+    let (icon_sz, cell_w, cell_h) = cell_dims(&spec);
+    let tile_font_px = if spec.text_size <= 0 {
+        13
+    } else {
+        spec.text_size.clamp(9, 20)
+    };
+    let gw_px = (cell_w * dpi).round().max(48.0) as i32;
+    let gh_px = (cell_h * dpi).round().max(48.0) as i32;
+    let path = win.entries[idrag.idx].path.clone();
+    let name = win.entries[idrag.idx].name.clone();
+    let multi_count = if win.selected.len() > 1 && win.selected.contains(&idrag.idx) {
+        win.selected.len()
+    } else {
+        1
+    };
+
+    let Some(mut buf) = Buffer::new(gw_px, gh_px, dpi, 10.0) else {
+        return;
+    };
+    {
+        let batch = render::AlphaBatch::new(buf.dc, dpi);
+        let c = Canvas::new(buf.dc, dpi);
+        c.round([1.0, 1.0, cell_w - 1.0, cell_h - 1.0], 10.0, 0x162038, 225, false, false);
+        c.round([1.0, 1.0, cell_w - 1.0, cell_h - 1.0], 10.0, 0x7c9cff, 245, true, false);
+        if let Some(img) = win.icon_for(&path) {
+            let ix = ((cell_w - icon_sz) * 0.5).round();
+            c.image(img, [ix, 6.0, ix + icon_sz, 6.0 + icon_sz]);
+        }
+        if multi_count > 1 {
+            c.round([cell_w - 24.0, 4.0, cell_w - 4.0, 22.0], 9.0, 0x4f8cff, 245, false, false);
+        }
+        drop(batch);
+    }
+    draw_cleartype_text(
+        buf.dc,
+        &name,
+        [
+            (2.0 * dpi).round() as i32,
+            ((8.0 + icon_sz) * dpi).round() as i32,
+            ((cell_w - 2.0) * dpi).round() as i32,
+            ((cell_h - 2.0) * dpi).round() as i32,
+        ],
+        (tile_font_px as f32 * dpi).round() as i32,
+        600,
+        0xffffff,
+        DT_CENTER | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX,
+    );
+    if multi_count > 1 {
+        let badge = format!("{multi_count}");
+        draw_cleartype_text(
+            buf.dc,
+            &badge,
+            [
+                ((cell_w - 24.0) * dpi).round() as i32,
+                (4.0 * dpi).round() as i32,
+                ((cell_w - 4.0) * dpi).round() as i32,
+                (22.0 * dpi).round() as i32,
+            ],
+            (11.0 * dpi).round() as i32,
+            700,
+            0xffffff,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+        );
+    }
+    let gx = screen_pt.x - gw_px / 2;
+    let gy = screen_pt.y - ((icon_sz * 0.5 + 6.0) * dpi).round() as i32;
+    SetWindowPos(
+        ghost_hwnd,
+        HWND_TOPMOST,
+        gx,
+        gy,
+        gw_px,
+        gh_px,
+        SWP_NOACTIVATE | SWP_SHOWWINDOW,
+    );
+    buf.present_with_alpha_opacity(ghost_hwnd, false, 240);
+    if let Ok(mut sh) = win.shared.try_borrow_mut() {
+        sh.drag_ghost_buf = Some(buf);
+    }
+}
+
+fn is_ignored_entry(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower == "desktop.ini" || lower == "thumbs.db" || lower == ".ds_store"
+}
+
+fn folder_signature(dir: &Path) -> u64 {
+    let Ok(rd) = fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut acc = 1469598103934665603u64;
+    let mut count = 0u64;
+    for entry in rd.flatten() {
+        let name = entry.file_name();
+        let lossy = name.to_string_lossy();
+        if is_ignored_entry(&lossy) {
+            continue;
+        }
+        count += 1;
+        let mut h = 1469598103934665603u64;
+        for b in lossy.as_bytes() {
+            h ^= *b as u64;
+            h = h.wrapping_mul(1099511628211);
+        }
+        if let Ok(meta) = entry.metadata() {
+            h ^= meta.len();
+            if let Ok(m) = meta.modified() {
+                if let Ok(d) = m.duration_since(SystemTime::UNIX_EPOCH) {
+                    h ^= d.as_secs();
+                }
+            }
+        }
+        acc = acc.wrapping_add(h);
+    }
+    acc ^ (count.wrapping_mul(0x9e3779b97f4a7c15))
+}
+
+fn parse_rule_extensions(exts: &str) -> Vec<String> {
+    exts.split(|c: char| c == ',' || c == ';' || c.is_whitespace())
+        .map(|s| s.trim().trim_start_matches('.').to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn is_temp_download_file(name: &str, ext: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    if is_ignored_entry(&lower) || lower.starts_with("~$") || lower.starts_with('.') {
+        return true;
+    }
+    matches!(
+        ext,
+        "crdownload" | "part" | "tmp" | "opdownload" | "download" | "partial" | "bak"
+    )
+}
+
+fn is_file_ready_for_routing(path: &Path, meta: &fs::Metadata, baseline: SystemTime, force_existing: bool) -> bool {
+    if !meta.is_file() {
+        return false;
+    }
+    let now = SystemTime::now();
+    let newest_ts = meta
+        .modified()
+        .ok()
+        .into_iter()
+        .chain(meta.created().ok())
+        .max()
+        .unwrap_or(now);
+    if !force_existing && newest_ts < baseline {
+        return false;
+    }
+    if let Ok(modified) = meta.modified() {
+        if let Ok(age) = now.duration_since(modified) {
+            if age.as_millis() < 800 {
+                return false;
+            }
+        }
+    }
+    fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .is_ok()
+}
+
+unsafe fn auto_watch_and_route(shared: &Rc<RefCell<SharedState>>, force_existing: bool) {
+    let (rules_enabled, watch_downloads, baseline, specs) = {
+        let Ok(sh) = shared.try_borrow() else {
+            return;
+        };
+        (
+            sh.config.rules_enabled,
+            sh.config.watch_downloads,
+            sh.watch_baseline,
+            sh.config.fences.clone(),
+        )
+    };
+
+    if rules_enabled || force_existing {
+        let mut active_rules: Vec<(String, PathBuf, Vec<String>, bool)> = specs
+            .iter()
+            .filter(|f| f.visible && f.auto_rule_enabled && !f.auto_rule_exts.trim().is_empty())
+            .map(|f| {
+                let is_dl = f.id == "downloads" || f.title.eq_ignore_ascii_case("downloads");
+                (
+                    f.id.clone(),
+                    PathBuf::from(&f.folder),
+                    parse_rule_extensions(&f.auto_rule_exts),
+                    is_dl,
+                )
+            })
+            .filter(|(_, _, exts, _)| !exts.is_empty())
+            .collect();
+        // Prioritize specific rules (Images, PC Programs, custom rules) before Downloads
+        active_rules.sort_by_key(|(_, _, _, is_dl)| *is_dl);
+
+        if !active_rules.is_empty() {
+            let home = model::user_home();
+            let mut watch_dirs = vec![home.join("Desktop")];
+            if watch_downloads {
+                let dl_dir = home.join("Downloads");
+                if !watch_dirs.contains(&dl_dir) {
+                    watch_dirs.push(dl_dir);
+                }
+            }
+            for src_dir in watch_dirs {
+                let Ok(rd) = fs::read_dir(&src_dir) else {
+                    continue;
+                };
+                for entry in rd.flatten() {
+                    let path = entry.path();
+                    let Ok(meta) = entry.metadata() else {
+                        continue;
+                    };
+                    if !meta.is_file() {
+                        continue;
+                    }
+                    let file_name = entry.file_name().to_string_lossy().to_string();
+                    let ext = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("")
+                        .to_ascii_lowercase();
+                    if ext.is_empty() || is_temp_download_file(&file_name, &ext) {
+                        continue;
+                    }
+                    if !force_existing {
+                        let already = shared
+                            .try_borrow()
+                            .map(|s| s.routed_files.contains(&path))
+                            .unwrap_or(false);
+                        if already {
+                            continue;
+                        }
+                    }
+                    if !is_file_ready_for_routing(&path, &meta, baseline, force_existing) {
+                        continue;
+                    }
+                    let matched_dst = active_rules
+                        .iter()
+                        .find(|(_, _, exts, _)| exts.iter().any(|e| e == &ext || e == "*"))
+                        .map(|(_, dst, _, _)| dst.clone());
+                    let Some(dst_folder) = matched_dst else {
+                        continue;
+                    };
+                    if path.parent().map(|p| p == dst_folder.as_path()).unwrap_or(false) {
+                        continue;
+                    }
+                    if let Ok(new_path) = move_entry_to_folder(&path, &dst_folder) {
+                        crate::logger::info(
+                            "fences-rule",
+                            format!("Auto-routed {:?} -> {:?}", path, new_path),
+                        );
+                        if let Ok(mut sh) = shared.try_borrow_mut() {
+                            sh.routed_files.insert(new_path);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Check folder signatures for all visible fences and reload any that changed
+    let wins = shared
+        .try_borrow()
+        .map(|s| s.windows.clone())
+        .unwrap_or_default();
+    for w in wins {
+        let (spec_id, folder, visible) = {
+            let Ok(b) = w.try_borrow() else {
+                continue;
+            };
+            let Some(spec) = b.spec() else {
+                continue;
+            };
+            (b.spec_id.clone(), PathBuf::from(spec.folder), b.visible)
+        };
+        if !visible {
+            continue;
+        }
+        let sig = folder_signature(&folder);
+        let changed = {
+            let Ok(mut sh) = shared.try_borrow_mut() else {
+                continue;
+            };
+            let prev = sh.folder_sigs.insert(spec_id, sig);
+            prev != Some(sig)
+        };
+        if changed {
+            if let Ok(mut b) = w.try_borrow_mut() {
+                b.reload_entries();
+                b.paint();
+            }
+        }
+    }
+}
+
+unsafe fn build_fences_settings_rows(config: &FencesConfig) -> Vec<crate::settings_ui::Row> {
+    let mut rows = vec![
+        crate::settings_ui::Row::section("GLOBAL AUTO-ROUTE"),
+        crate::settings_ui::Row::toggle(
+            1,
+            "Auto-Route Rules (Desktop & Downloads)",
+            "Automatically sort newly downloaded or added files into matching Fences",
+            config.rules_enabled,
+        ),
+        crate::settings_ui::Row::toggle(
+            2,
+            "Watch Windows Downloads Folder",
+            "Route newly downloaded images, installers & files from Downloads into Fences",
+            config.watch_downloads,
+        ),
+        crate::settings_ui::Row::accent_button(
+            3,
+            "Run Auto-Route Rules Now on Desktop & Downloads",
+            0x4f8cff,
+        ),
+        crate::settings_ui::Row::button(
+            4,
+            "Reset Default 3 Rules (Images, PC Programs, Downloads)",
+        ),
+        crate::settings_ui::Row::section("FENCE RULES & EXTENSIONS"),
+    ];
+    for (i, f) in config.fences.iter().enumerate() {
+        let base_id = 100 + (i as u32) * 10;
+        let rule_summary = if f.auto_rule_exts.trim().is_empty() {
+            "No rule extensions configured".to_string()
+        } else {
+            format!("Extensions: {}", f.auto_rule_exts)
+        };
+        rows.push(crate::settings_ui::Row::toggle(
+            base_id,
+            format!("Rule: {}", f.title),
+            rule_summary,
+            f.auto_rule_enabled && !f.auto_rule_exts.trim().is_empty(),
+        ));
+        rows.push(crate::settings_ui::Row::button(
+            base_id + 1,
+            format!("Edit \"{}\" Rule Extensions...", f.title),
+        ));
+    }
+    rows
+}
+
+unsafe fn open_fences_settings(shared: &Rc<RefCell<SharedState>>) {
+    let (notify_hwnd, glass, rows) = {
+        let Ok(sh) = shared.try_borrow() else {
+            return;
+        };
+        let hwnd = sh
+            .windows
+            .first()
+            .and_then(|w| w.try_borrow().ok().map(|b| b.hwnd))
+            .unwrap_or(null_mut());
+        (hwnd, Rc::clone(&sh.glass), build_fences_settings_rows(&sh.config))
+    };
+    if notify_hwnd.is_null() {
+        return;
+    }
+    let Ok(mut sh) = shared.try_borrow_mut() else {
+        return;
+    };
+    if sh.settings_ui.is_none() {
+        sh.settings_ui = crate::settings_ui::Host::create(
+            notify_hwnd,
+            "Desktop Fences Rules",
+            "3 Built-in Rules (Images, PC Programs, Downloads) + Custom Fence Rules",
+            glass,
+            rows.clone(),
+            FENCES_SETTINGS_CHANGED,
+        )
+        .ok();
+    }
+    if let Some(ui) = &mut sh.settings_ui {
+        ui.set_rows(rows);
+        ui.show();
+    }
+}
+
+unsafe fn handle_fences_settings_changed(shared: &Rc<RefCell<SharedState>>) {
+    let changes = {
+        let Ok(mut sh) = shared.try_borrow_mut() else {
+            return;
+        };
+        let Some(ui) = &mut sh.settings_ui else {
+            return;
+        };
+        ui.take_changes()
+    };
+    if changes.is_empty() {
+        return;
+    }
+
+    let mut edit_idx: Option<(usize, String, String)> = None;
+    let mut run_now = false;
+    let prompt_owner: HWND;
+    {
+        let Ok(mut sh) = shared.try_borrow_mut() else {
+            return;
+        };
+        prompt_owner = sh
+            .settings_ui
+            .as_ref()
+            .map(|u| u.hwnd())
+            .unwrap_or(null_mut());
+        for change in changes {
+            let id = change.id;
+            let bval = matches!(change.value, crate::settings_ui::Value::Bool(true));
+            match id {
+                1 => {
+                    sh.config.rules_enabled = bval;
+                    sh.watch_baseline = SystemTime::now();
+                }
+                2 => {
+                    sh.config.watch_downloads = bval;
+                    sh.watch_baseline = SystemTime::now();
+                }
+                3 => {
+                    run_now = true;
+                }
+                4 => {
+                    for f in &mut sh.config.fences {
+                        let (en, exts) = model::default_rule_for_fence(&f.id, &f.title);
+                        if en {
+                            f.auto_rule_enabled = true;
+                            f.auto_rule_exts = exts;
+                        }
+                    }
+                    sh.config.rules_enabled = true;
+                    sh.config.watch_downloads = true;
+                }
+                _ if id >= 100 => {
+                    let idx = ((id - 100) / 10) as usize;
+                    let sub = (id - 100) % 10;
+                    if let Some(f) = sh.config.fences.get_mut(idx) {
+                        if sub == 0 {
+                            f.auto_rule_enabled = bval;
+                            if f.auto_rule_enabled && f.auto_rule_exts.trim().is_empty() {
+                                let (_, def_exts) = model::default_rule_for_fence(&f.id, &f.title);
+                                if !def_exts.is_empty() {
+                                    f.auto_rule_exts = def_exts;
+                                }
+                            }
+                        } else if sub == 1 {
+                            edit_idx = Some((idx, f.title.clone(), f.auto_rule_exts.clone()));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let root = sh.root.clone();
+        let _ = sh.config.save(&root);
+    }
+
+    if let Some((idx, title, current_exts)) = edit_idx {
+        let prompt_title = format!("Rule Extensions for \"{title}\" (comma-separated)");
+        if let Some(updated) = crate::text_prompt::choose(prompt_owner, &prompt_title, &current_exts) {
+            if let Ok(mut sh) = shared.try_borrow_mut() {
+                if let Some(f) = sh.config.fences.get_mut(idx) {
+                    let cleaned = updated.trim().to_string();
+                    f.auto_rule_exts = cleaned.clone();
+                    f.auto_rule_enabled = !cleaned.is_empty();
+                }
+                let root = sh.root.clone();
+                let _ = sh.config.save(&root);
+            }
+        }
+    }
+
+    if run_now {
+        auto_watch_and_route(shared, true);
+    }
+
+    let rows = shared
+        .try_borrow()
+        .ok()
+        .map(|sh| build_fences_settings_rows(&sh.config));
+    if let (Some(rows), Ok(mut sh)) = (rows, shared.try_borrow_mut()) {
+        if let Some(ui) = &mut sh.settings_ui {
+            ui.set_rows(rows);
+        }
     }
 }
 
@@ -1468,7 +2046,12 @@ impl FenceWindow {
                     ));
                 }
                 if let Some(idrag) = self.item_drag.filter(|d| d.active) {
-                    if idrag.idx < self.entries.len() {
+                    let has_ghost_win = self
+                        .shared
+                        .try_borrow()
+                        .map(|s| !s.drag_ghost_hwnd.is_null())
+                        .unwrap_or(false);
+                    if !has_ghost_win && idrag.idx < self.entries.len() {
                         let gx = (idrag.cur_pt[0] - cell_w * 0.5).round();
                         let gy = (idrag.cur_pt[1] - icon_sz * 0.5).round();
                         c.round([gx, gy, gx + cell_w, gy + cell_h], 10.0, 0x162038, 195, false, false);
@@ -1962,6 +2545,73 @@ unsafe fn execute_menu_command(win: &RefCell<FenceWindow>, cmd: usize) {
         CMD_ITEM_DELETE => {
             FenceWindow::delete_selected_for_window(win);
         }
+        CMD_RULE_TOGGLE => {
+            if let Ok(mut b) = win.try_borrow_mut() {
+                b.update_spec(|s| {
+                    s.auto_rule_enabled = !s.auto_rule_enabled;
+                    if s.auto_rule_enabled && s.auto_rule_exts.trim().is_empty() {
+                        let (_, def_exts) = model::default_rule_for_fence(&s.id, &s.title);
+                        if !def_exts.is_empty() {
+                            s.auto_rule_exts = def_exts;
+                        }
+                    }
+                });
+            }
+        }
+        CMD_RULE_PRESET_IMAGES => {
+            if let Ok(mut b) = win.try_borrow_mut() {
+                b.update_spec(|s| {
+                    s.auto_rule_enabled = true;
+                    s.auto_rule_exts = model::RULE_EXTS_IMAGES.into();
+                });
+            }
+        }
+        CMD_RULE_PRESET_PROGRAMS => {
+            if let Ok(mut b) = win.try_borrow_mut() {
+                b.update_spec(|s| {
+                    s.auto_rule_enabled = true;
+                    s.auto_rule_exts = model::RULE_EXTS_PROGRAMS.into();
+                });
+            }
+        }
+        CMD_RULE_PRESET_DOWNLOADS => {
+            if let Ok(mut b) = win.try_borrow_mut() {
+                b.update_spec(|s| {
+                    s.auto_rule_enabled = true;
+                    s.auto_rule_exts = model::RULE_EXTS_DOWNLOADS.into();
+                });
+            }
+        }
+        CMD_RULE_EDIT_EXTS => {
+            let info = win
+                .try_borrow()
+                .ok()
+                .and_then(|b| b.spec().map(|s| (b.hwnd, s.title, s.auto_rule_exts)));
+            if let Some((hwnd, title, cur_exts)) = info {
+                let prompt = format!("Auto-Route Extensions for \"{title}\" (comma-separated)");
+                if let Some(updated) = crate::text_prompt::choose(hwnd, &prompt, &cur_exts) {
+                    if let Ok(mut b) = win.try_borrow_mut() {
+                        let cleaned = updated.trim().to_string();
+                        b.update_spec(|s| {
+                            s.auto_rule_exts = cleaned.clone();
+                            s.auto_rule_enabled = !cleaned.is_empty();
+                        });
+                    }
+                }
+            }
+        }
+        CMD_RULE_RUN_NOW => {
+            let shared = win.try_borrow().ok().map(|b| Rc::clone(&b.shared));
+            if let Some(sh) = shared {
+                auto_watch_and_route(&sh, true);
+            }
+        }
+        CMD_RULE_OPEN_SETTINGS => {
+            let shared = win.try_borrow().ok().map(|b| Rc::clone(&b.shared));
+            if let Some(sh) = shared {
+                open_fences_settings(&sh);
+            }
+        }
         _ => {
             if let Ok(mut b) = win.try_borrow_mut() {
                 b.apply_menu_command(cmd);
@@ -2043,7 +2693,39 @@ unsafe fn run_context_menu(win: &RefCell<FenceWindow>, mut sx: i32, mut sy: i32)
     let icon_menu = CreatePopupMenu();
     let text_menu = CreatePopupMenu();
     let flt_menu = CreatePopupMenu();
+    let rule_menu = CreatePopupMenu();
     let flag = |b: bool| MF_STRING | if b { MF_CHECKED } else { MF_UNCHECKED };
+
+    let rule_active = spec.auto_rule_enabled && !spec.auto_rule_exts.trim().is_empty();
+    let rule_toggle_label = if rule_active {
+        format!("Enable Auto-Route Rule ({})", spec.auto_rule_exts)
+    } else {
+        "Enable Auto-Route Rule for This Fence".to_string()
+    };
+    AppendMenuW(rule_menu, flag(rule_active), CMD_RULE_TOGGLE, wide(&rule_toggle_label).as_ptr());
+    AppendMenuW(rule_menu, MF_SEPARATOR, 0, null());
+    AppendMenuW(
+        rule_menu,
+        flag(spec.auto_rule_enabled && spec.auto_rule_exts == model::RULE_EXTS_IMAGES),
+        CMD_RULE_PRESET_IMAGES,
+        wide("Preset: Images (png, jpg, webp, gif, svg...)").as_ptr(),
+    );
+    AppendMenuW(
+        rule_menu,
+        flag(spec.auto_rule_enabled && spec.auto_rule_exts == model::RULE_EXTS_PROGRAMS),
+        CMD_RULE_PRESET_PROGRAMS,
+        wide("Preset: PC Programs (exe, msi, lnk, bat...)").as_ptr(),
+    );
+    AppendMenuW(
+        rule_menu,
+        flag(spec.auto_rule_enabled && spec.auto_rule_exts == model::RULE_EXTS_DOWNLOADS),
+        CMD_RULE_PRESET_DOWNLOADS,
+        wide("Preset: Downloads (zip, rar, pdf, docx, mp4...)").as_ptr(),
+    );
+    AppendMenuW(rule_menu, MF_SEPARATOR, 0, null());
+    AppendMenuW(rule_menu, MF_STRING, CMD_RULE_EDIT_EXTS, wide("Custom Extensions...").as_ptr());
+    AppendMenuW(rule_menu, MF_STRING, CMD_RULE_RUN_NOW, wide("Run Auto-Route Rules Now").as_ptr());
+    AppendMenuW(rule_menu, MF_STRING, CMD_RULE_OPEN_SETTINGS, wide("All Fence Rules Settings...").as_ptr());
 
     AppendMenuW(add_menu, MF_STRING, CMD_ADD_FILES, wide("Add Program / App / File...").as_ptr());
     AppendMenuW(add_menu, MF_STRING, CMD_ADD_FOLDER_LINK, wide("Add Folder Shortcut...").as_ptr());
@@ -2106,6 +2788,7 @@ unsafe fn run_context_menu(win: &RefCell<FenceWindow>, mut sx: i32, mut sy: i32)
     }
 
     AppendMenuW(menu, MF_POPUP, add_menu as usize, wide("Add Folder / Program (+ )").as_ptr());
+    AppendMenuW(menu, MF_POPUP, rule_menu as usize, wide("Auto-Route Rule").as_ptr());
     AppendMenuW(menu, MF_POPUP, view_menu as usize, wide("View Mode & Thumbnails").as_ptr());
     AppendMenuW(menu, MF_POPUP, icon_menu as usize, wide("Icon Size").as_ptr());
     AppendMenuW(menu, MF_POPUP, text_menu as usize, wide("Tile Text Size").as_ptr());
@@ -2487,6 +3170,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 b.item_drag = Some(idrag);
                 if idrag.active {
                     b.hover_item = b.hit_slot(lx, ly);
+                    update_drag_ghost(&mut b, idrag, pt, dpi);
                     b.paint();
                 }
                 return 0;
@@ -2623,9 +3307,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             0
         }
         WM_LBUTTONUP => {
-            let mut cross_fence_move: Option<(Rc<RefCell<FenceWindow>>, Vec<PathBuf>, String)> = None;
+            let mut cross_fence_move: Option<(Option<Rc<RefCell<FenceWindow>>>, Vec<PathBuf>, String)> = None;
             if let Ok(mut b) = win.try_borrow_mut() {
                 if let Some(idrag) = b.item_drag.take() {
+                    hide_drag_ghost(&b.shared);
                     ReleaseCapture();
                     if idrag.active && idrag.idx < b.entries.len() {
                         let mut pt: POINT = zeroed();
@@ -2669,20 +3354,23 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                                     }
                                 }
                             }
-                            if let Some(tw) = target_win {
-                                let mut paths = Vec::new();
-                                if b.selected.len() > 1 && b.selected.contains(&idrag.idx) {
-                                    let mut idxs: Vec<usize> = b.selected.iter().copied().collect();
-                                    idxs.sort_unstable();
-                                    for i in idxs {
-                                        if let Some(e) = b.entries.get(i) {
-                                            paths.push(e.path.clone());
-                                        }
+                            let mut paths = Vec::new();
+                            if b.selected.len() > 1 && b.selected.contains(&idrag.idx) {
+                                let mut idxs: Vec<usize> = b.selected.iter().copied().collect();
+                                idxs.sort_unstable();
+                                for i in idxs {
+                                    if let Some(e) = b.entries.get(i) {
+                                        paths.push(e.path.clone());
                                     }
-                                } else if let Some(e) = b.entries.get(idrag.idx) {
-                                    paths.push(e.path.clone());
                                 }
-                                cross_fence_move = Some((tw, paths, target_folder));
+                            } else if let Some(e) = b.entries.get(idrag.idx) {
+                                paths.push(e.path.clone());
+                            }
+                            if let Some(tw) = target_win {
+                                cross_fence_move = Some((Some(tw), paths, target_folder));
+                            } else if is_desktop_point(pt) {
+                                let desk_dir = model::user_home().join("Desktop");
+                                cross_fence_move = Some((None, paths, desk_dir.to_string_lossy().into_owned()));
                             }
                         }
                     }
@@ -2712,7 +3400,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                     }
                 }
             }
-            if let Some((target_win, paths, dst_folder)) = cross_fence_move {
+            if let Some((target_win_opt, paths, dst_folder)) = cross_fence_move {
                 let dst_dir = Path::new(&dst_folder);
                 let mut any_moved = false;
                 for p in paths {
@@ -2726,11 +3414,29 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                         b.reload_entries();
                         b.paint();
                     }
-                    if let Ok(mut ob) = target_win.try_borrow_mut() {
-                        ob.reload_entries();
-                        ob.paint();
+                    if let Some(target_win) = target_win_opt {
+                        if let Ok(mut ob) = target_win.try_borrow_mut() {
+                            ob.reload_entries();
+                            ob.paint();
+                        }
                     }
                 }
+            }
+            0
+        }
+        WM_CAPTURECHANGED | WM_CANCELMODE => {
+            if let Ok(mut b) = win.try_borrow_mut() {
+                if b.item_drag.take().is_some() {
+                    hide_drag_ghost(&b.shared);
+                    b.paint();
+                }
+            }
+            0
+        }
+        FENCES_SETTINGS_CHANGED => {
+            let shared = win.try_borrow().ok().map(|b| Rc::clone(&b.shared));
+            if let Some(sh) = shared {
+                handle_fences_settings_changed(&sh);
             }
             0
         }

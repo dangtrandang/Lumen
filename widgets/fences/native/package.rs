@@ -7,7 +7,9 @@ impl WidgetHost for super::Host {
     unsafe fn hide(&mut self) {
         super::Host::hide(self);
     }
-    unsafe fn settings(&mut self) {}
+    unsafe fn settings(&mut self) {
+        self.show_settings();
+    }
     unsafe fn visible(&self) -> bool {
         self.is_visible()
     }
